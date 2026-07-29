@@ -1,0 +1,24 @@
+# Private environment variables and API keys
+.env
+
+# Python virtual environment
+.venv/
+
+# Python-generated cache files
+__pycache__/
+*.py[cod]
+
+# Testing and code-quality caches
+.pytest_cache/
+.ruff_cache/
+
+# PyCharm local settings
+.idea/
+
+# macOS metadata
+.DS_Store
+
+# Generated project data
+data/raw/
+data/parsed/
+data/qdrant/
