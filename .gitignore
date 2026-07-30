@@ -7,6 +7,7 @@
 # Python-generated cache files
 __pycache__/
 *.py[cod]
+*.egg-info/
 
 # Testing and code-quality caches
 .pytest_cache/
