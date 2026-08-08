@@ -52,3 +52,50 @@ def test_cli_downloads_latest_filing(monkeypatch, capsys, tmp_path) -> None:
     assert captured_call["form"] == "10-K"
     assert captured_call["output_directory"] == tmp_path / "raw"
     assert capsys.readouterr().out == f"Saved filing: {expected_path}\n"
+
+
+def test_cli_downloads_and_parses_filing(monkeypatch, capsys, tmp_path) -> None:
+    monkeypatch.setenv(
+        "SEC_USER_AGENT",
+        "Test Project contact@test.invalid",
+    )
+    saved_path = tmp_path / "raw" / "NVDA_10-K_2026-02-25.html"
+    parsed_parent = tmp_path / "parsed"
+    parsed_directory = parsed_parent / saved_path.stem
+    captured_call = {}
+
+    monkeypatch.setattr(
+        "financial_rag.cli.ingest_latest_filing",
+        lambda **kwargs: saved_path,
+    )
+
+    def fake_parse(input_path, output_directory):
+        captured_call["input_path"] = input_path
+        captured_call["output_directory"] = output_directory
+        return [
+            output_directory / "text" / "00000.md",
+            output_directory / "text" / "00001.md",
+            output_directory / "tables" / "00002.md",
+        ]
+
+    monkeypatch.setattr(
+        "financial_rag.cli.parse_filing_file",
+        fake_parse,
+    )
+
+    main(
+        [
+            "NVDA",
+            "--download",
+            "--parse",
+            "--parsed-output-directory",
+            str(parsed_parent),
+        ]
+    )
+
+    assert captured_call["input_path"] == saved_path
+    assert captured_call["output_directory"] == parsed_directory
+    assert capsys.readouterr().out == (
+        f"Saved filing: {saved_path}\n"
+        f"Parsed filing: 2 text blocks, 1 tables -> {parsed_directory}\n"
+    )

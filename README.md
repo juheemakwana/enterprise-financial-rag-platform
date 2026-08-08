@@ -22,10 +22,14 @@ SEC filing ingestion is working. The project can:
 - Find the latest filing of a requested form, such as `10-K`
 - Build the official SEC archive URL
 - Download and save the raw filing HTML
+- Remove scripts and hidden machine-only XBRL metadata
+- Extract readable text and financial tables in document order
+- Convert HTML tables into Markdown
+- Save parsed text and tables as auditable local files
 - Validate the workflow with automated tests
 
-Document parsing, chunking, retrieval, answer generation, and evaluation are
-planned for later stages.
+Chunking, retrieval, answer generation, and evaluation are planned for later
+stages.
 
 ## Requirements
 
@@ -61,17 +65,36 @@ Edit `.env` and replace the placeholder with your real SEC identity. The private
 Look up a company's SEC CIK:
 
 ```bash
-python -m financial_rag.cli NVDA
+financial-rag NVDA
 ```
 
 Download the latest 10-K:
 
 ```bash
-python -m financial_rag.cli NVDA --download --form 10-K
+financial-rag NVDA --download --form 10-K
 ```
 
-Raw filings are saved under `data/raw/` and excluded from Git because financial
-filings can be large.
+Download and parse the latest 10-K in one command:
+
+```bash
+financial-rag NVDA --download --parse
+```
+
+Raw filings are saved under `data/raw/`. Parsed filings are saved in a
+filing-specific folder under `data/parsed/`, for example:
+
+```text
+data/parsed/NVDA_10-K_2026-02-25/
+├── text/
+│   ├── 00000.md
+│   └── 00001.md
+└── tables/
+    ├── 00003.md
+    └── 00005.md
+```
+
+The numbers preserve the elements' original order in the filing. Generated data
+is excluded from Git because SEC filings and parsed output can be large.
 
 ## Tests
 
