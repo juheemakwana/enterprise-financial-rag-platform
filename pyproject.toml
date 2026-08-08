@@ -9,9 +9,13 @@ description = "A learning-focused RAG platform for SEC financial filings"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "beautifulsoup4>=4.12,<5",
     "python-dotenv>=1.0,<2",
     "requests>=2.32,<3",
 ]
+
+[project.scripts]
+financial-rag = "financial_rag.cli:main"
 
 [project.optional-dependencies]
 dev = [
