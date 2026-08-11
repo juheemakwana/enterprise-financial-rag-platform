@@ -1,0 +1,255 @@
+import json
+from pathlib import Path
+
+from financial_rag.chunking import (
+    DEFAULT_CHUNK_TOKENS,
+    DEFAULT_OVERLAP_TOKENS,
+    EMBEDDING_MODEL_NAME,
+    MAX_MODEL_TOKENS,
+    chunk_document_elements,
+    chunk_table_element,
+    chunk_text_elements,
+    count_tokens,
+    load_tokenizer,
+    write_chunks_jsonl,
+)
+from financial_rag.models import DocumentChunk, DocumentElement, FilingMetadata
+
+
+class FakeTokenizer:
+    def __init__(self) -> None:
+        self.token_to_id = {}
+        self.id_to_token = {}
+
+    def encode(self, text: str, *, add_special_tokens: bool) -> list[int]:
+        assert add_special_tokens is False
+        token_ids = []
+        for token in text.split():
+            if token not in self.token_to_id:
+                token_id = len(self.token_to_id)
+                self.token_to_id[token] = token_id
+                self.id_to_token[token_id] = token
+            token_ids.append(self.token_to_id[token])
+        return token_ids
+
+    def decode(
+        self,
+        token_ids: list[int],
+        *,
+        skip_special_tokens: bool,
+    ) -> str:
+        assert skip_special_tokens is True
+        return " ".join(self.id_to_token[token_id] for token_id in token_ids)
+
+
+def make_filing_metadata() -> FilingMetadata:
+    return FilingMetadata(
+        ticker="NVDA",
+        cik="0001045810",
+        form="10-K",
+        filing_date="2026-02-25",
+        accession_number="0001045810-26-000021",
+        source_url="https://www.sec.gov/Archives/example/nvda.htm",
+        local_path=Path("data/raw/NVDA_10-K_2026-02-25.html"),
+    )
+
+
+def test_chunk_settings_fit_embedding_model_limit() -> None:
+    assert EMBEDDING_MODEL_NAME == "BAAI/bge-small-en-v1.5"
+    assert DEFAULT_CHUNK_TOKENS == 400
+    assert DEFAULT_OVERLAP_TOKENS == 80
+    assert DEFAULT_CHUNK_TOKENS < MAX_MODEL_TOKENS
+
+
+def test_count_tokens_uses_selected_tokenizer() -> None:
+    tokenizer = FakeTokenizer()
+
+    result = count_tokens("Revenue increased during the year", tokenizer)
+
+    assert result == 5
+
+
+def test_load_tokenizer_uses_embedding_model(monkeypatch) -> None:
+    captured_call = {}
+    expected_tokenizer = FakeTokenizer()
+
+    def fake_from_pretrained(model_name):
+        captured_call["model_name"] = model_name
+        return expected_tokenizer
+
+    monkeypatch.setattr(
+        "financial_rag.chunking.AutoTokenizer.from_pretrained",
+        fake_from_pretrained,
+    )
+
+    result = load_tokenizer()
+
+    assert result is expected_tokenizer
+    assert captured_call["model_name"] == EMBEDDING_MODEL_NAME
+
+
+def test_chunk_text_elements_combines_blocks_with_overlap() -> None:
+    elements = [
+        DocumentElement(0, "text", "alpha beta"),
+        DocumentElement(1, "text", "gamma delta"),
+        DocumentElement(2, "text", "epsilon zeta"),
+    ]
+
+    chunks = chunk_text_elements(
+        elements=elements,
+        filing=make_filing_metadata(),
+        tokenizer=FakeTokenizer(),
+        chunk_tokens=5,
+        overlap_tokens=2,
+    )
+
+    assert [chunk.content for chunk in chunks] == [
+        "alpha beta\n\ngamma delta",
+        "gamma delta\n\nepsilon zeta",
+    ]
+    assert [chunk.source_sequences for chunk in chunks] == [
+        (0, 1),
+        (1, 2),
+    ]
+    assert all(chunk.token_count <= 5 for chunk in chunks)
+
+
+def test_chunk_text_elements_splits_one_oversized_block() -> None:
+    elements = [
+        DocumentElement(
+            7,
+            "text",
+            "one two three four five six seven eight nine",
+        )
+    ]
+
+    chunks = chunk_text_elements(
+        elements=elements,
+        filing=make_filing_metadata(),
+        tokenizer=FakeTokenizer(),
+        chunk_tokens=4,
+        overlap_tokens=1,
+    )
+
+    assert [chunk.content for chunk in chunks] == [
+        "one two three four",
+        "four five six seven",
+        "seven eight nine",
+    ]
+    assert [chunk.source_sequences for chunk in chunks] == [(7,), (7,), (7,)]
+    assert [chunk.token_count for chunk in chunks] == [4, 4, 3]
+
+
+def test_chunk_table_element_keeps_small_table_intact() -> None:
+    element = DocumentElement(
+        12,
+        "table",
+        "| Year | Revenue |\n| --- | --- |\n| 2026 | 130,500 |",
+    )
+
+    chunks = chunk_table_element(
+        element=element,
+        filing=make_filing_metadata(),
+        tokenizer=FakeTokenizer(),
+        chunk_tokens=20,
+        starting_sequence=4,
+    )
+
+    assert len(chunks) == 1
+    assert chunks[0].sequence == 4
+    assert chunks[0].chunk_id == "NVDA_10-K_2026-02-25-00004"
+    assert chunks[0].content == element.content
+    assert chunks[0].source_sequences == (12,)
+
+
+def test_chunk_table_element_splits_rows_and_repeats_header() -> None:
+    element = DocumentElement(
+        12,
+        "table",
+        "| Year | Revenue |\n"
+        "| --- | --- |\n"
+        "| 2026 | 130,500 |\n"
+        "| 2025 | 60,900 |",
+    )
+
+    chunks = chunk_table_element(
+        element=element,
+        filing=make_filing_metadata(),
+        tokenizer=FakeTokenizer(),
+        chunk_tokens=15,
+    )
+
+    assert [chunk.content for chunk in chunks] == [
+        "| Year | Revenue |\n| --- | --- |\n| 2026 | 130,500 |",
+        "| Year | Revenue |\n| --- | --- |\n| 2025 | 60,900 |",
+    ]
+    assert [chunk.source_sequences for chunk in chunks] == [(12,), (12,)]
+    assert all(chunk.token_count <= 15 for chunk in chunks)
+
+
+def test_chunk_document_elements_preserves_text_and_table_order() -> None:
+    elements = [
+        DocumentElement(0, "text", "Revenue increased during the year."),
+        DocumentElement(1, "text", "Management discussed strong demand."),
+        DocumentElement(
+            2,
+            "table",
+            "| Year | Revenue |\n| --- | --- |\n| 2026 | 130,500 |",
+        ),
+        DocumentElement(3, "text", "Management expects continued growth."),
+    ]
+
+    chunks = chunk_document_elements(
+        elements=elements,
+        filing=make_filing_metadata(),
+        tokenizer=FakeTokenizer(),
+        chunk_tokens=20,
+        overlap_tokens=4,
+    )
+
+    assert [chunk.sequence for chunk in chunks] == [0, 1, 2]
+    assert [chunk.chunk_type for chunk in chunks] == [
+        "text",
+        "table",
+        "text",
+    ]
+    assert [chunk.source_sequences for chunk in chunks] == [
+        (0, 1),
+        (2,),
+        (3,),
+    ]
+    assert [chunk.chunk_id for chunk in chunks] == [
+        "NVDA_10-K_2026-02-25-00000",
+        "NVDA_10-K_2026-02-25-00001",
+        "NVDA_10-K_2026-02-25-00002",
+    ]
+
+
+def test_write_chunks_jsonl_preserves_content_and_provenance(tmp_path) -> None:
+    filing = make_filing_metadata()
+    chunks = [
+        DocumentChunk(
+            chunk_id="NVDA_10-K_2026-02-25-00000",
+            sequence=0,
+            chunk_type="text",
+            content="NVIDIA reports financial results.",
+            token_count=6,
+            source_sequences=(0, 1),
+            filing=filing,
+        )
+    ]
+    output_path = tmp_path / "chunks" / "chunks.jsonl"
+
+    result = write_chunks_jsonl(chunks, output_path)
+    record = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert result == output_path
+    assert record["chunk_id"] == "NVDA_10-K_2026-02-25-00000"
+    assert record["source_sequences"] == [0, 1]
+    assert record["filing"]["ticker"] == "NVDA"
+    assert record["filing"]["accession_number"] == (
+        "0001045810-26-000021"
+    )
+    assert record["filing"]["local_path"] == (
+        "data/raw/NVDA_10-K_2026-02-25.html"
+    )

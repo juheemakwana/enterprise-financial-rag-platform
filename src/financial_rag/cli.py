@@ -6,7 +6,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from financial_rag.parser import parse_filing_file
+from financial_rag.chunking import (
+    chunk_document_elements,
+    load_tokenizer,
+    write_chunks_jsonl,
+)
+from financial_rag.parser import load_parsed_elements, parse_filing_file
 from financial_rag.sec import get_cik_for_ticker, ingest_latest_filing
 
 
@@ -43,10 +48,23 @@ def main(arguments: list[str] | None = None) -> None:
         default=Path("data/parsed"),
         help="Parent directory for parsed filing content",
     )
+    parser.add_argument(
+        "--chunk",
+        action="store_true",
+        help="Create token-limited chunks after parsing the filing",
+    )
+    parser.add_argument(
+        "--chunks-output-directory",
+        type=Path,
+        default=Path("data/chunks"),
+        help="Parent directory for chunk JSONL output",
+    )
     args = parser.parse_args(arguments)
 
     if args.parse and not args.download:
         parser.error("--parse requires --download")
+    if args.chunk and not args.parse:
+        parser.error("--chunk requires --parse")
 
     load_dotenv()
     user_agent = os.getenv("SEC_USER_AGENT", "").strip()
@@ -59,12 +77,13 @@ def main(arguments: list[str] | None = None) -> None:
     ticker = args.ticker.upper()
 
     if args.download:
-        saved_path = ingest_latest_filing(
+        filing = ingest_latest_filing(
             ticker=ticker,
             form=args.form.upper(),
             user_agent=user_agent,
             output_directory=args.output_directory,
         )
+        saved_path = filing.local_path
         print(f"Saved filing: {saved_path}")
 
         if args.parse:
@@ -83,6 +102,21 @@ def main(arguments: list[str] | None = None) -> None:
                 f"Parsed filing: {text_count} text blocks, "
                 f"{table_count} tables -> {parsed_directory}"
             )
+
+            if args.chunk:
+                elements = load_parsed_elements(parsed_directory)
+                chunks = chunk_document_elements(
+                    elements=elements,
+                    filing=filing,
+                    tokenizer=load_tokenizer(),
+                )
+                chunks_path = (
+                    args.chunks_output_directory
+                    / saved_path.stem
+                    / "chunks.jsonl"
+                )
+                write_chunks_jsonl(chunks, chunks_path)
+                print(f"Chunked filing: {len(chunks)} chunks -> {chunks_path}")
         return
 
     cik = get_cik_for_ticker(ticker=ticker, user_agent=user_agent)
