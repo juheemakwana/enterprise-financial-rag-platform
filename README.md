@@ -26,9 +26,12 @@ SEC filing ingestion is working. The project can:
 - Extract readable text and financial tables in document order
 - Convert HTML tables into Markdown
 - Save parsed text and tables as auditable local files
+- Count tokens with the `BAAI/bge-small-en-v1.5` tokenizer
+- Create ordered, citation-aware text and table chunks
+- Save chunks and SEC provenance as JSON Lines
 - Validate the workflow with automated tests
 
-Chunking, retrieval, answer generation, and evaluation are planned for later
+Embedding, retrieval, answer generation, and evaluation are planned for later
 stages.
 
 ## Requirements
@@ -80,6 +83,12 @@ Download and parse the latest 10-K in one command:
 financial-rag NVDA --download --parse
 ```
 
+Download, parse, and chunk the latest 10-K in one command:
+
+```bash
+financial-rag NVDA --download --parse --chunk
+```
+
 Raw filings are saved under `data/raw/`. Parsed filings are saved in a
 filing-specific folder under `data/parsed/`, for example:
 
@@ -94,7 +103,35 @@ data/parsed/NVDA_10-K_2026-02-25/
 ```
 
 The numbers preserve the elements' original order in the filing. Generated data
-is excluded from Git because SEC filings and parsed output can be large.
+is excluded from Git because SEC filings and derived output can be large.
+
+Chunk records are saved under a filing-specific directory:
+
+```text
+data/chunks/NVDA_10-K_2026-02-25/chunks.jsonl
+```
+
+Each JSON line contains the chunk content, type, token count, original element
+sequences, ticker, CIK, form, filing date, accession number, official SEC URL,
+and local source path.
+
+## Chunking strategy
+
+The selected embedding model, `BAAI/bge-small-en-v1.5`, accepts at most 512
+tokens. Chunks target 400 tokens so model-added tokens and future prefixes have
+room within that limit.
+
+- Consecutive text elements are combined up to 400 tokens.
+- Text chunks reuse up to 80 tokens of preceding context when whole elements fit.
+- An individual oversized text block is split into exact token windows with
+  80-token overlap.
+- Tables remain intact when they fit within 400 tokens.
+- Oversized tables are split by data rows, and their Markdown header is repeated
+  in every resulting chunk.
+- Text, tables, chunk IDs, and source sequence numbers retain document order.
+
+The first chunking run downloads the BGE tokenizer from Hugging Face. PyTorch and
+the embedding model weights are not required until the embedding stage.
 
 ## Tests
 

@@ -4,6 +4,8 @@ from pathlib import Path
 
 import requests
 
+from financial_rag.models import FilingMetadata
+
 
 COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 COMPANY_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
@@ -134,8 +136,8 @@ def ingest_latest_filing(
     form: str,
     user_agent: str,
     output_directory: Path,
-) -> Path:
-    """Download and save the newest SEC filing of a requested form."""
+) -> FilingMetadata:
+    """Download a filing and return its identity and saved location."""
     cik = get_cik_for_ticker(ticker=ticker, user_agent=user_agent)
     submissions = fetch_company_submissions(cik=cik, user_agent=user_agent)
     filing = find_latest_filing(submissions=submissions, form=form)
@@ -145,10 +147,19 @@ def ingest_latest_filing(
         primary_document=filing["primary_document"],
     )
     html = download_filing_html(filing_url, user_agent=user_agent)
-    return save_filing_html(
+    saved_path = save_filing_html(
         html=html,
         output_directory=output_directory,
         ticker=ticker,
         form=filing["form"],
         filing_date=filing["filing_date"],
+    )
+    return FilingMetadata(
+        ticker=ticker.upper(),
+        cik=cik,
+        form=filing["form"],
+        filing_date=filing["filing_date"],
+        accession_number=filing["accession_number"],
+        source_url=filing_url,
+        local_path=saved_path,
     )

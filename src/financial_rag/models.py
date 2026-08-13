@@ -1,6 +1,7 @@
 """Shared data structures for the financial RAG pipeline."""
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 
@@ -11,3 +12,29 @@ class DocumentElement:
     sequence: int
     element_type: Literal["text", "table"]
     content: str
+
+
+@dataclass(frozen=True)
+class FilingMetadata:
+    """Identity and source information for one SEC filing."""
+
+    ticker: str
+    cik: str
+    form: str
+    filing_date: str
+    accession_number: str
+    source_url: str
+    local_path: Path
+
+
+@dataclass(frozen=True)
+class DocumentChunk:
+    """One searchable text or table chunk with filing provenance."""
+
+    chunk_id: str
+    sequence: int
+    chunk_type: Literal["text", "table"]
+    content: str
+    token_count: int
+    source_sequences: tuple[int, ...]
+    filing: FilingMetadata

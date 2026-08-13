@@ -254,18 +254,25 @@ def test_ingest_latest_filing_connects_complete_download_flow(
         fake_download,
     )
 
-    saved_path = ingest_latest_filing(
+    filing = ingest_latest_filing(
         ticker="NVDA",
         form="10-K",
         user_agent="Test Project contact@test.invalid",
         output_directory=tmp_path / "raw",
     )
 
-    assert saved_path.name == "NVDA_10-K_2025-02-26.html"
-    assert saved_path.read_text(encoding="utf-8") == (
+    assert filing.ticker == "NVDA"
+    assert filing.cik == "0001045810"
+    assert filing.form == "10-K"
+    assert filing.filing_date == "2025-02-26"
+    assert filing.accession_number == "0001045810-25-000050"
+    assert filing.local_path.name == "NVDA_10-K_2025-02-26.html"
+    assert filing.local_path.read_text(encoding="utf-8") == (
         "<html><body>NVIDIA 10-K</body></html>"
     )
-    assert captured_download["url"] == (
+    expected_url = (
         "https://www.sec.gov/Archives/edgar/data/1045810/"
         "000104581025000050/nvda-20250126.htm"
     )
+    assert captured_download["url"] == expected_url
+    assert filing.source_url == expected_url

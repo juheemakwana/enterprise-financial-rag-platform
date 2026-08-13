@@ -3,6 +3,7 @@ from financial_rag.parser import (
     clean_html,
     extract_document_elements,
     extract_text_blocks,
+    load_parsed_elements,
     parse_filing_file,
     table_to_markdown,
     write_parsed_elements,
@@ -184,3 +185,31 @@ def test_parse_filing_file_reads_extracts_and_writes_html(tmp_path) -> None:
     ]
     assert paths[0].read_text(encoding="utf-8") == "Financial Results\n"
     assert "| 2026 | 130,500 |" in paths[1].read_text(encoding="utf-8")
+
+
+def test_load_parsed_elements_restores_original_order(tmp_path) -> None:
+    parsed_directory = tmp_path / "parsed"
+    write_parsed_elements(
+        [
+            DocumentElement(0, "text", "Financial Results"),
+            DocumentElement(
+                1,
+                "table",
+                "| Year | Revenue |\n| --- | --- |\n| 2026 | 130,500 |",
+            ),
+            DocumentElement(2, "text", "Management discussion"),
+        ],
+        parsed_directory,
+    )
+
+    elements = load_parsed_elements(parsed_directory)
+
+    assert elements == [
+        DocumentElement(0, "text", "Financial Results"),
+        DocumentElement(
+            1,
+            "table",
+            "| Year | Revenue |\n| --- | --- |\n| 2026 | 130,500 |",
+        ),
+        DocumentElement(2, "text", "Management discussion"),
+    ]

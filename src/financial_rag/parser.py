@@ -178,3 +178,28 @@ def parse_filing_file(
         minimum_characters=minimum_characters,
     )
     return write_parsed_elements(elements, output_directory)
+
+
+def load_parsed_elements(input_directory: Path) -> list[DocumentElement]:
+    """Load saved text and table elements in their original sequence."""
+    elements = []
+
+    for element_type, directory_name in (
+        ("text", "text"),
+        ("table", "tables"),
+    ):
+        for path in (input_directory / directory_name).glob("*.md"):
+            elements.append(
+                DocumentElement(
+                    sequence=int(path.stem),
+                    element_type=element_type,
+                    content=path.read_text(encoding="utf-8").strip(),
+                )
+            )
+
+    elements.sort(key=lambda element: element.sequence)
+    sequences = [element.sequence for element in elements]
+    if len(sequences) != len(set(sequences)):
+        raise ValueError("Parsed element sequence numbers must be unique")
+
+    return elements
