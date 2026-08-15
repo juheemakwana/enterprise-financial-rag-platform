@@ -18,7 +18,13 @@ DEFAULT_OVERLAP_TOKENS = 80
 class Tokenizer(Protocol):
     """Small tokenizer interface needed by the chunking functions."""
 
-    def encode(self, text: str, *, add_special_tokens: bool) -> list[int]: ...
+    def encode(
+        self,
+        text: str,
+        *,
+        add_special_tokens: bool,
+        verbose: bool = False,
+    ) -> list[int]: ...
 
     def decode(
         self,
@@ -37,7 +43,13 @@ def load_tokenizer(
 
 def count_tokens(text: str, tokenizer: Tokenizer) -> int:
     """Count text tokens without model-added special tokens."""
-    return len(tokenizer.encode(text, add_special_tokens=False))
+    return len(
+        tokenizer.encode(
+            text,
+            add_special_tokens=False,
+            verbose=False,
+        )
+    )
 
 
 def _split_oversized_text(
@@ -48,7 +60,11 @@ def _split_oversized_text(
     overlap_tokens: int,
 ) -> list[tuple[int, str]]:
     """Split one long element into overlapping tokenizer-sized segments."""
-    token_ids = tokenizer.encode(text, add_special_tokens=False)
+    token_ids = tokenizer.encode(
+        text,
+        add_special_tokens=False,
+        verbose=False,
+    )
     step = chunk_tokens - overlap_tokens
     segments = []
 
@@ -301,3 +317,50 @@ def write_chunks_jsonl(
             output_file.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     return output_path
+
+
+def load_chunks_jsonl(input_path: Path) -> list[DocumentChunk]:
+    """Load saved JSON Lines records back into document chunks."""
+    chunks = []
+
+    with input_path.open("r", encoding="utf-8") as input_file:
+        for line_number, line in enumerate(input_file, start=1):
+            if not line.strip():
+                continue
+
+            try:
+                record = json.loads(line)
+                filing_record = record["filing"]
+                filing = FilingMetadata(
+                    ticker=filing_record["ticker"],
+                    cik=filing_record["cik"],
+                    form=filing_record["form"],
+                    filing_date=filing_record["filing_date"],
+                    accession_number=filing_record["accession_number"],
+                    source_url=filing_record["source_url"],
+                    local_path=Path(filing_record["local_path"]),
+                )
+                chunks.append(
+                    DocumentChunk(
+                        chunk_id=record["chunk_id"],
+                        sequence=record["sequence"],
+                        chunk_type=record["chunk_type"],
+                        content=record["content"],
+                        token_count=record["token_count"],
+                        source_sequences=tuple(record["source_sequences"]),
+                        filing=filing,
+                    )
+                )
+            except (json.JSONDecodeError, KeyError, TypeError) as error:
+                raise ValueError(
+                    f"Invalid chunk record on line {line_number}"
+                ) from error
+
+    chunk_ids = [chunk.chunk_id for chunk in chunks]
+    sequences = [chunk.sequence for chunk in chunks]
+    if len(chunk_ids) != len(set(chunk_ids)):
+        raise ValueError("Chunk IDs must be unique")
+    if len(sequences) != len(set(sequences)):
+        raise ValueError("Chunk sequence numbers must be unique")
+
+    return chunks
