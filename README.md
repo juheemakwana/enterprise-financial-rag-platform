@@ -29,9 +29,12 @@ SEC filing ingestion is working. The project can:
 - Count tokens with the `BAAI/bge-small-en-v1.5` tokenizer
 - Create ordered, citation-aware text and table chunks
 - Save chunks and SEC provenance as JSON Lines
+- Create normalized 384-dimensional BGE embeddings locally
+- Persist vectors and searchable SEC metadata in local Qdrant
+- Retrieve ranked evidence with ticker and filing-form filters
 - Validate the workflow with automated tests
 
-Embedding, retrieval, answer generation, and evaluation are planned for later
+Answer generation and systematic retrieval evaluation are planned for later
 stages.
 
 ## Requirements
@@ -89,6 +92,24 @@ Download, parse, and chunk the latest 10-K in one command:
 financial-rag NVDA --download --parse --chunk
 ```
 
+Run the complete ingestion and vector-indexing pipeline:
+
+```bash
+financial-rag NVDA --download --parse --chunk --index
+```
+
+Search the local vector index and return cited evidence:
+
+```bash
+financial-rag NVDA \
+  --search "What was NVIDIA revenue in fiscal 2026?" \
+  --limit 5
+```
+
+Search is local and does not require an SEC request. Use `--form 10-Q` to filter
+for a different filing form and `--qdrant-directory` to select another local
+Qdrant database.
+
 Raw filings are saved under `data/raw/`. Parsed filings are saved in a
 filing-specific folder under `data/parsed/`, for example:
 
@@ -132,6 +153,30 @@ room within that limit.
 
 The first chunking run downloads the BGE tokenizer from Hugging Face. PyTorch and
 the embedding model weights are not required until the embedding stage.
+
+## Embeddings and vector search
+
+`BAAI/bge-small-en-v1.5` converts each chunk into a normalized 384-dimensional
+vector. The project currently runs embedding inference on CPU. The first
+`--index` run downloads the model weights from Hugging Face; later runs reuse the
+local cache.
+
+Qdrant runs in local on-disk mode at `data/qdrant/`, so Docker, a Qdrant server,
+cloud account, and API key are not required. The collection uses cosine
+similarity. Every vector stores the original chunk content and these payload
+fields:
+
+- Chunk ID, type, sequence, token count, and source element sequences
+- Ticker, CIK, form, filing date, and accession number
+- Official SEC URL and local source path
+
+Chunk IDs are converted into stable UUIDs before insertion. Running `--index`
+again updates the same points instead of creating duplicates.
+
+For search, the question is embedded with BGE's retrieval instruction. Qdrant
+returns the closest chunks with cosine scores and official SEC citations. These
+are ranked evidence results, not a generated final answer; retrieval evaluation
+and optional reranking will be added before answer generation.
 
 ## Tests
 

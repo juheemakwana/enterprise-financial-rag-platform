@@ -1,4 +1,4 @@
-from financial_rag.models import FilingMetadata
+from financial_rag.models import DocumentChunk, FilingMetadata, SearchResult
 from financial_rag.cli import main
 
 
@@ -186,4 +186,177 @@ def test_cli_downloads_parses_and_chunks_filing(
         f"Saved filing: {saved_path}\n"
         f"Parsed filing: 1 text blocks, 1 tables -> {parsed_directory}\n"
         f"Chunked filing: 3 chunks -> {chunks_path}\n"
+    )
+
+
+def test_cli_searches_local_qdrant_and_prints_cited_evidence(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
+    filing = make_filing_metadata(
+        tmp_path / "raw" / "NVDA_10-K_2026-02-25.html"
+    )
+    chunk = DocumentChunk(
+        chunk_id="NVDA_10-K_2026-02-25-00134",
+        sequence=134,
+        chunk_type="text",
+        content="Revenue for fiscal year 2026 was $215.9 billion.",
+        token_count=12,
+        source_sequences=(437, 438),
+        filing=filing,
+    )
+    expected_results = [SearchResult(score=0.8019, chunk=chunk)]
+    model = object()
+    query_vector = tuple([0.0] * 384)
+    captured_search = {}
+
+    class FakeClient:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    client = FakeClient()
+
+    monkeypatch.setattr(
+        "financial_rag.cli.load_embedding_model",
+        lambda: model,
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.embed_query",
+        lambda question, selected_model: query_vector,
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.open_local_vector_store",
+        lambda storage_path: client,
+    )
+
+    def fake_search(**kwargs):
+        captured_search.update(kwargs)
+        return expected_results
+
+    monkeypatch.setattr(
+        "financial_rag.cli.search_similar_chunks",
+        fake_search,
+    )
+
+    main(
+        [
+            "NVDA",
+            "--search",
+            "What was revenue in fiscal 2026?",
+            "--limit",
+            "1",
+            "--qdrant-directory",
+            str(tmp_path / "qdrant"),
+        ]
+    )
+
+    assert captured_search["client"] is client
+    assert captured_search["query_vector"] == query_vector
+    assert captured_search["limit"] == 1
+    assert captured_search["ticker"] == "NVDA"
+    assert captured_search["form"] == "10-K"
+    assert client.closed is True
+    assert capsys.readouterr().out == (
+        "Search results for: What was revenue in fiscal 2026?\n"
+        "1. score=0.8019 type=text "
+        "chunk=NVDA_10-K_2026-02-25-00134\n"
+        "   Revenue for fiscal year 2026 was $215.9 billion.\n"
+        "   SEC source: "
+        "https://www.sec.gov/Archives/example/nvda.htm\n"
+    )
+
+
+def test_cli_indexes_chunks_and_closes_qdrant(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv(
+        "SEC_USER_AGENT",
+        "Test Project contact@test.invalid",
+    )
+    saved_path = tmp_path / "raw" / "NVDA_10-K_2026-02-25.html"
+    parsed_directory = tmp_path / "parsed" / saved_path.stem
+    chunks_path = tmp_path / "chunks" / saved_path.stem / "chunks.jsonl"
+    qdrant_directory = tmp_path / "qdrant"
+    chunks = [object(), object()]
+    embedded_chunks = [object(), object()]
+    model = object()
+
+    class FakeClient:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    client = FakeClient()
+
+    monkeypatch.setattr(
+        "financial_rag.cli.ingest_latest_filing",
+        lambda **kwargs: make_filing_metadata(saved_path),
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.parse_filing_file",
+        lambda **kwargs: [parsed_directory / "text" / "00000.md"],
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.load_parsed_elements",
+        lambda input_directory: [object()],
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.load_tokenizer",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.chunk_document_elements",
+        lambda **kwargs: chunks,
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.write_chunks_jsonl",
+        lambda chunk_records, output_path: output_path,
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.load_embedding_model",
+        lambda: model,
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.embed_chunks",
+        lambda chunk_records, selected_model: embedded_chunks,
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.open_local_vector_store",
+        lambda storage_path: client,
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.upsert_embedded_chunks",
+        lambda selected_client, records: len(records),
+    )
+
+    main(
+        [
+            "NVDA",
+            "--download",
+            "--parse",
+            "--chunk",
+            "--index",
+            "--output-directory",
+            str(tmp_path / "raw"),
+            "--parsed-output-directory",
+            str(tmp_path / "parsed"),
+            "--chunks-output-directory",
+            str(tmp_path / "chunks"),
+            "--qdrant-directory",
+            str(qdrant_directory),
+        ]
+    )
+
+    assert client.closed is True
+    assert capsys.readouterr().out == (
+        f"Saved filing: {saved_path}\n"
+        f"Parsed filing: 1 text blocks, 0 tables -> {parsed_directory}\n"
+        f"Chunked filing: 2 chunks -> {chunks_path}\n"
+        f"Indexed filing: 2 vectors -> {qdrant_directory}\n"
     )

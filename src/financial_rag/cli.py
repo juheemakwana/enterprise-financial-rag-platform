@@ -11,14 +11,20 @@ from financial_rag.chunking import (
     load_tokenizer,
     write_chunks_jsonl,
 )
+from financial_rag.embeddings import embed_chunks, embed_query, load_embedding_model
 from financial_rag.parser import load_parsed_elements, parse_filing_file
 from financial_rag.sec import get_cik_for_ticker, ingest_latest_filing
+from financial_rag.vectorstore import (
+    open_local_vector_store,
+    search_similar_chunks,
+    upsert_embedded_chunks,
+)
 
 
 def main(arguments: list[str] | None = None) -> None:
-    """Look up and print the SEC CIK for a company ticker."""
+    """Run SEC ingestion or local semantic search for a company ticker."""
     parser = argparse.ArgumentParser(
-        description="Look up a company's SEC CIK number.",
+        description="Ingest or search SEC filings for a company ticker.",
     )
     parser.add_argument("ticker", help="Company ticker, for example NVDA")
     parser.add_argument(
@@ -59,12 +65,69 @@ def main(arguments: list[str] | None = None) -> None:
         default=Path("data/chunks"),
         help="Parent directory for chunk JSONL output",
     )
+    parser.add_argument(
+        "--index",
+        action="store_true",
+        help="Embed chunks and store them in local Qdrant",
+    )
+    parser.add_argument(
+        "--search",
+        metavar="QUESTION",
+        help="Search the local Qdrant database for relevant evidence",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=5,
+        help="Maximum search results to return (default: 5)",
+    )
+    parser.add_argument(
+        "--qdrant-directory",
+        type=Path,
+        default=Path("data/qdrant"),
+        help="Local Qdrant storage directory",
+    )
     args = parser.parse_args(arguments)
 
     if args.parse and not args.download:
         parser.error("--parse requires --download")
     if args.chunk and not args.parse:
         parser.error("--chunk requires --parse")
+    if args.index and not args.chunk:
+        parser.error("--index requires --chunk")
+    if args.search and (args.download or args.parse or args.chunk or args.index):
+        parser.error("--search cannot be combined with ingestion options")
+    if args.limit <= 0:
+        parser.error("--limit must be positive")
+
+    ticker = args.ticker.upper()
+
+    if args.search:
+        model = load_embedding_model()
+        query_vector = embed_query(args.search, model)
+        client = open_local_vector_store(args.qdrant_directory)
+        try:
+            results = search_similar_chunks(
+                client=client,
+                query_vector=query_vector,
+                limit=args.limit,
+                ticker=ticker,
+                form=args.form,
+            )
+        finally:
+            client.close()
+
+        print(f"Search results for: {args.search}")
+        for rank, result in enumerate(results, start=1):
+            chunk = result.chunk
+            preview = " ".join(chunk.content.split())[:500]
+            print(
+                f"{rank}. score={result.score:.4f} "
+                f"type={chunk.chunk_type} chunk={chunk.chunk_id}"
+            )
+            print(f"   {preview}")
+            print(f"   SEC source: {chunk.filing.source_url}")
+        return
 
     load_dotenv()
     user_agent = os.getenv("SEC_USER_AGENT", "").strip()
@@ -73,8 +136,6 @@ def main(arguments: list[str] | None = None) -> None:
         raise SystemExit(
             "Set SEC_USER_AGENT in .env to your real name and contact email."
         )
-
-    ticker = args.ticker.upper()
 
     if args.download:
         filing = ingest_latest_filing(
@@ -117,6 +178,24 @@ def main(arguments: list[str] | None = None) -> None:
                 )
                 write_chunks_jsonl(chunks, chunks_path)
                 print(f"Chunked filing: {len(chunks)} chunks -> {chunks_path}")
+
+                if args.index:
+                    embedded_chunks = embed_chunks(
+                        chunks,
+                        load_embedding_model(),
+                    )
+                    client = open_local_vector_store(args.qdrant_directory)
+                    try:
+                        indexed_count = upsert_embedded_chunks(
+                            client,
+                            embedded_chunks,
+                        )
+                    finally:
+                        client.close()
+                    print(
+                        f"Indexed filing: {indexed_count} vectors -> "
+                        f"{args.qdrant_directory}"
+                    )
         return
 
     cik = get_cik_for_ticker(ticker=ticker, user_agent=user_agent)

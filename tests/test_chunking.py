@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from financial_rag.chunking import (
     DEFAULT_CHUNK_TOKENS,
     DEFAULT_OVERLAP_TOKENS,
@@ -10,6 +12,7 @@ from financial_rag.chunking import (
     chunk_table_element,
     chunk_text_elements,
     count_tokens,
+    load_chunks_jsonl,
     load_tokenizer,
     write_chunks_jsonl,
 )
@@ -21,8 +24,15 @@ class FakeTokenizer:
         self.token_to_id = {}
         self.id_to_token = {}
 
-    def encode(self, text: str, *, add_special_tokens: bool) -> list[int]:
+    def encode(
+        self,
+        text: str,
+        *,
+        add_special_tokens: bool,
+        verbose: bool = False,
+    ) -> list[int]:
         assert add_special_tokens is False
+        assert verbose is False
         token_ids = []
         for token in text.split():
             if token not in self.token_to_id:
@@ -253,3 +263,35 @@ def test_write_chunks_jsonl_preserves_content_and_provenance(tmp_path) -> None:
     assert record["filing"]["local_path"] == (
         "data/raw/NVDA_10-K_2026-02-25.html"
     )
+
+    restored_chunks = load_chunks_jsonl(output_path)
+    assert restored_chunks == chunks
+
+
+def test_load_chunks_jsonl_rejects_duplicate_chunk_ids(tmp_path) -> None:
+    filing = make_filing_metadata()
+    chunks = [
+        DocumentChunk(
+            chunk_id="duplicate-id",
+            sequence=0,
+            chunk_type="text",
+            content="First chunk",
+            token_count=2,
+            source_sequences=(0,),
+            filing=filing,
+        ),
+        DocumentChunk(
+            chunk_id="duplicate-id",
+            sequence=1,
+            chunk_type="text",
+            content="Second chunk",
+            token_count=2,
+            source_sequences=(1,),
+            filing=filing,
+        ),
+    ]
+    output_path = tmp_path / "chunks.jsonl"
+    write_chunks_jsonl(chunks, output_path)
+
+    with pytest.raises(ValueError, match="Chunk IDs must be unique"):
+        load_chunks_jsonl(output_path)

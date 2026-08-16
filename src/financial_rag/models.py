@@ -38,3 +38,19 @@ class DocumentChunk:
     token_count: int
     source_sequences: tuple[int, ...]
     filing: FilingMetadata
+
+
+@dataclass(frozen=True)
+class EmbeddedChunk:
+    """A document chunk paired with its semantic embedding vector."""
+
+    chunk: DocumentChunk
+    vector: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    """One semantically retrieved chunk and its similarity score."""
+
+    score: float
+    chunk: DocumentChunk
