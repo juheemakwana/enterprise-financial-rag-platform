@@ -16,6 +16,7 @@ from financial_rag.vectorstore import (
 def make_embedded_chunks() -> list[EmbeddedChunk]:
     filing = FilingMetadata(
         ticker="NVDA",
+        company_name="NVIDIA CORP",
         cik="0001045810",
         form="10-K",
         filing_date="2026-02-25",
@@ -82,6 +83,7 @@ def test_upsert_embedded_chunks_preserves_payload_without_duplicates() -> None:
         with_payload=True,
     )[0]
     assert point.payload["ticker"] == "NVDA"
+    assert point.payload["company_name"] == "NVIDIA CORP"
     assert point.payload["chunk_type"] == "text"
     assert point.payload["source_sequences"] == [0, 1]
     assert point.payload["accession_number"] == "0001045810-26-000021"

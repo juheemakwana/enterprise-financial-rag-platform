@@ -174,7 +174,7 @@ def chunk_table_element(
     chunk_tokens: int = DEFAULT_CHUNK_TOKENS,
     starting_sequence: int = 0,
 ) -> list[DocumentChunk]:
-    """Keep a Markdown table whole or split it by rows with repeated headers."""
+    """Create one searchable chunk per table row with repeated context."""
     if element.element_type != "table":
         raise ValueError("chunk_table_element accepts only a table element")
     if chunk_tokens <= 0 or chunk_tokens > MAX_MODEL_TOKENS:
@@ -182,42 +182,78 @@ def chunk_table_element(
             f"chunk_tokens must be between 1 and {MAX_MODEL_TOKENS}"
         )
 
-    content = element.content.strip()
-    if count_tokens(content, tokenizer) <= chunk_tokens:
-        parts = [content]
-    else:
-        lines = content.splitlines()
-        if len(lines) < 3:
-            raise ValueError("Oversized table does not contain splittable rows")
+    def parse_cells(line: str) -> list[str]:
+        return [cell.strip() for cell in line.strip().strip("|").split("|")]
 
-        header_lines = lines[:2]
-        data_rows = lines[2:]
-        header = "\n".join(header_lines)
-        if count_tokens(header, tokenizer) >= chunk_tokens:
-            raise ValueError("Table header leaves no room for data rows")
+    def is_separator(cells: list[str]) -> bool:
+        non_empty_cells = [cell for cell in cells if cell]
+        return bool(non_empty_cells) and all(
+            set(cell) <= {"-", ":"} for cell in non_empty_cells
+        )
 
-        parts = []
-        current_lines = [*header_lines]
-
-        for row in data_rows:
-            proposed_lines = [*current_lines, row]
-            proposed_content = "\n".join(proposed_lines)
-
-            if count_tokens(proposed_content, tokenizer) <= chunk_tokens:
-                current_lines.append(row)
+    def compact(cells: list[str]) -> str:
+        values = [cell for cell in cells if cell]
+        compacted = []
+        index = 0
+        while index < len(values):
+            value = values[index]
+            if value in {"$", "€", "£"} and index + 1 < len(values):
+                compacted.append(value + values[index + 1])
+                index += 2
                 continue
+            if value == "%" and compacted:
+                compacted[-1] += "%"
+                index += 1
+                continue
+            compacted.append(value)
+            index += 1
+        return " | ".join(compacted)
 
-            if len(current_lines) == len(header_lines):
-                raise ValueError("A table row exceeds the chunk token limit")
+    rows = []
+    for line in element.content.strip().splitlines():
+        cells = parse_cells(line)
+        if cells and not is_separator(cells):
+            rows.append(cells)
 
-            parts.append("\n".join(current_lines))
-            current_lines = [*header_lines, row]
+    if not rows:
+        raise ValueError("Table does not contain a non-empty row")
 
-            if count_tokens("\n".join(current_lines), tokenizer) > chunk_tokens:
-                raise ValueError("A table row exceeds the chunk token limit")
+    if len(rows) == 1:
+        parts = [f"Table row:\n{compact(rows[0])}"]
+    else:
+        context_rows = [rows[0]]
+        data_start = 1
+        while data_start < len(rows) and not rows[data_start][0]:
+            context_rows.append(rows[data_start])
+            data_start += 1
 
-        if len(current_lines) > len(header_lines):
-            parts.append("\n".join(current_lines))
+        data_rows = rows[data_start:]
+        if not data_rows:
+            raise ValueError("Table does not contain a recognizable data row")
+
+        context = "\n".join(
+            compact(row) for row in context_rows if compact(row)
+        )
+        parts = []
+        for row in data_rows:
+            data_row = compact(row)
+            if not data_row:
+                continue
+            parts.append(
+                f"Table context:\n{context}\n\nData row:\n{data_row}"
+            )
+
+    if not parts:
+        raise ValueError("Table does not contain a non-empty data row")
+
+    filing_context = (
+        f"Company: {filing.company_name} ({filing.ticker})\n"
+        f"Form: {filing.form}"
+    )
+    parts = [f"{filing_context}\n\n{part}" for part in parts]
+
+    if any(count_tokens(part, tokenizer) > chunk_tokens for part in parts):
+        raise ValueError("Table row with context exceeds the chunk token limit")
 
     chunks = []
     for part in parts:
@@ -306,6 +342,7 @@ def write_chunks_jsonl(
                 "source_sequences": list(chunk.source_sequences),
                 "filing": {
                     "ticker": chunk.filing.ticker,
+                    "company_name": chunk.filing.company_name,
                     "cik": chunk.filing.cik,
                     "form": chunk.filing.form,
                     "filing_date": chunk.filing.filing_date,
@@ -333,6 +370,9 @@ def load_chunks_jsonl(input_path: Path) -> list[DocumentChunk]:
                 filing_record = record["filing"]
                 filing = FilingMetadata(
                     ticker=filing_record["ticker"],
+                    company_name=filing_record.get(
+                        "company_name", filing_record["ticker"]
+                    ),
                     cik=filing_record["cik"],
                     form=filing_record["form"],
                     filing_date=filing_record["filing_date"],

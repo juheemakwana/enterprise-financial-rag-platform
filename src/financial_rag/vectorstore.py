@@ -58,6 +58,7 @@ def build_chunk_payload(chunk: DocumentChunk) -> dict:
         "token_count": chunk.token_count,
         "source_sequences": list(chunk.source_sequences),
         "ticker": chunk.filing.ticker,
+        "company_name": chunk.filing.company_name,
         "cik": chunk.filing.cik,
         "form": chunk.filing.form,
         "filing_date": chunk.filing.filing_date,
@@ -116,6 +117,7 @@ def _chunk_from_payload(payload: dict) -> DocumentChunk:
     """Rebuild one document chunk from stored Qdrant payload fields."""
     filing = FilingMetadata(
         ticker=payload["ticker"],
+        company_name=payload.get("company_name", payload["ticker"]),
         cik=payload["cik"],
         form=payload["form"],
         filing_date=payload["filing_date"],

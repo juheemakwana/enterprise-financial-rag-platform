@@ -11,6 +11,7 @@ from financial_rag.models import DocumentChunk, FilingMetadata, SearchResult
 def make_filing_metadata(local_path):
     return FilingMetadata(
         ticker="NVDA",
+        company_name="NVIDIA CORP",
         cik="0001045810",
         form="10-K",
         filing_date="2026-02-25",

@@ -156,6 +156,7 @@ def ingest_latest_filing(
     )
     return FilingMetadata(
         ticker=ticker.upper(),
+        company_name=submissions["name"].strip(),
         cik=cik,
         form=filing["form"],
         filing_date=filing["filing_date"],

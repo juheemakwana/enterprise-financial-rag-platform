@@ -9,6 +9,7 @@ from financial_rag.models import DocumentChunk, FilingMetadata
 def test_document_chunk_keeps_content_and_filing_provenance() -> None:
     filing = FilingMetadata(
         ticker="NVDA",
+        company_name="NVIDIA CORP",
         cik="0001045810",
         form="10-K",
         filing_date="2026-02-25",
@@ -27,6 +28,7 @@ def test_document_chunk_keeps_content_and_filing_provenance() -> None:
     )
 
     assert chunk.filing.ticker == "NVDA"
+    assert chunk.filing.company_name == "NVIDIA CORP"
     assert chunk.source_sequences == (0, 1)
     assert chunk.content == "NVIDIA reports financial results."
 

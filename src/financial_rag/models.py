@@ -19,6 +19,7 @@ class FilingMetadata:
     """Identity and source information for one SEC filing."""
 
     ticker: str
+    company_name: str
     cik: str
     form: str
     filing_date: str

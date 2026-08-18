@@ -179,7 +179,7 @@ similarity. Every vector stores the original chunk content and these payload
 fields:
 
 - Chunk ID, type, sequence, token count, and source element sequences
-- Ticker, CIK, form, filing date, and accession number
+- Company name, ticker, CIK, form, filing date, and accession number
 - Official SEC URL and local source path
 
 Chunk IDs are converted into stable UUIDs before insertion. Running `--index`
