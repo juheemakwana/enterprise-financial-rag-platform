@@ -287,7 +287,8 @@ def test_cli_evaluates_local_retrieval(
         form="10-K",
         expected_answer="$215.9 billion",
         category="financial_table",
-        accepted_evidence_chunk_ids=("revenue-chunk",),
+        accepted_source_sequences=(436,),
+        accepted_evidence_phrase_groups=(("revenue", "215.9 billion"),),
         notes="Test case.",
     )
     result = RetrievalEvaluationResult(

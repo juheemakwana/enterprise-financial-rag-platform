@@ -12,9 +12,29 @@ from financial_rag.evaluation import (
 
 
 def test_calculate_case_metrics_for_result_at_rank_two() -> None:
+    case = RetrievalCase(
+        case_id="revenue",
+        question="What was revenue?",
+        ticker="NVDA",
+        form="10-K",
+        expected_answer="$215.9 billion",
+        category="financial_table",
+        accepted_source_sequences=(436,),
+        accepted_evidence_phrase_groups=(("revenue", "215,938"),),
+        notes="Test case.",
+    )
     metrics = calculate_case_metrics(
-        retrieved_chunk_ids=["wrong-chunk", "correct-chunk", "another-chunk"],
-        accepted_evidence_chunk_ids=("correct-chunk",),
+        retrieved_chunks=[
+            SimpleNamespace(
+                source_sequences=(999,),
+                content="Revenue was 215,938.",
+            ),
+            SimpleNamespace(
+                source_sequences=(436,),
+                content="Revenue was 215,938.",
+            ),
+        ],
+        case=case,
     )
 
     assert metrics.first_relevant_rank == 2
@@ -25,9 +45,25 @@ def test_calculate_case_metrics_for_result_at_rank_two() -> None:
 
 
 def test_calculate_case_metrics_when_no_result_is_relevant() -> None:
+    case = RetrievalCase(
+        case_id="revenue",
+        question="What was revenue?",
+        ticker="NVDA",
+        form="10-K",
+        expected_answer="$215.9 billion",
+        category="financial_table",
+        accepted_source_sequences=(436,),
+        accepted_evidence_phrase_groups=(("revenue", "215,938"),),
+        notes="Test case.",
+    )
     metrics = calculate_case_metrics(
-        retrieved_chunk_ids=["wrong-chunk"],
-        accepted_evidence_chunk_ids=("correct-chunk",),
+        retrieved_chunks=[
+            SimpleNamespace(
+                source_sequences=(436,),
+                content="Revenue amount is missing.",
+            )
+        ],
+        case=case,
     )
 
     assert metrics.first_relevant_rank is None
@@ -46,7 +82,8 @@ def test_run_retrieval_evaluation(monkeypatch) -> None:
             form="10-K",
             expected_answer="$215.9 billion",
             category="financial_table",
-            accepted_evidence_chunk_ids=("revenue-chunk",),
+            accepted_source_sequences=(436,),
+            accepted_evidence_phrase_groups=(("revenue", "215.9 billion"),),
             notes="Test case.",
         ),
         RetrievalCase(
@@ -56,13 +93,31 @@ def test_run_retrieval_evaluation(monkeypatch) -> None:
             form="10-K",
             expected_answer="$62.6 billion",
             category="financial_table",
-            accepted_evidence_chunk_ids=("liquidity-chunk",),
+            accepted_source_sequences=(498,),
+            accepted_evidence_phrase_groups=(("cash", "62.6 billion"),),
             notes="Test case.",
         ),
     ]
-    returned_ids = {
-        "What was revenue?": ["wrong-chunk", "revenue-chunk"],
-        "What was liquidity?": ["wrong-chunk"],
+    returned_chunks = {
+        "What was revenue?": [
+            SimpleNamespace(
+                chunk_id="wrong-chunk",
+                source_sequences=(999,),
+                content="Unrelated revenue.",
+            ),
+            SimpleNamespace(
+                chunk_id="revenue-chunk",
+                source_sequences=(436,),
+                content="Revenue was $215.9 billion.",
+            ),
+        ],
+        "What was liquidity?": [
+            SimpleNamespace(
+                chunk_id="wrong-chunk",
+                source_sequences=(999,),
+                content="Unrelated cash.",
+            )
+        ],
     }
 
     def fake_embed_query(question, model):
@@ -76,8 +131,8 @@ def test_run_retrieval_evaluation(monkeypatch) -> None:
         assert ticker == "NVDA"
         assert form == "10-K"
         return [
-            SimpleNamespace(chunk=SimpleNamespace(chunk_id=chunk_id))
-            for chunk_id in returned_ids[query_vector]
+            SimpleNamespace(chunk=chunk)
+            for chunk in returned_chunks[query_vector]
         ]
 
     monkeypatch.setattr(
@@ -115,7 +170,11 @@ def test_load_retrieval_cases(tmp_path) -> None:
                 "form": "10-k",
                 "expected_answer": "$215.9 billion",
                 "category": "financial_table",
-                "accepted_evidence_chunk_ids": ["chunk-1", "chunk-2"],
+                "accepted_source_sequences": [436, 609],
+                "accepted_evidence_phrase_groups": [
+                    ["revenue", "215,938"],
+                    ["revenue", "215.9 billion"],
+                ],
                 "notes": "Either table is acceptable.",
             }
         ),
@@ -128,7 +187,11 @@ def test_load_retrieval_cases(tmp_path) -> None:
     assert cases[0].case_id == "nvda_revenue"
     assert cases[0].ticker == "NVDA"
     assert cases[0].form == "10-K"
-    assert cases[0].accepted_evidence_chunk_ids == ("chunk-1", "chunk-2")
+    assert cases[0].accepted_source_sequences == (436, 609)
+    assert cases[0].accepted_evidence_phrase_groups == (
+        ("revenue", "215,938"),
+        ("revenue", "215.9 billion"),
+    )
 
 
 def test_load_retrieval_cases_rejects_invalid_json(tmp_path) -> None:

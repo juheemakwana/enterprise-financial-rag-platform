@@ -198,11 +198,13 @@ six questions about NVIDIA's fiscal 2026 10-K. Each JSON line records:
 - A unique case ID and question
 - Ticker and filing form filters
 - The expected factual answer
-- One or more accepted evidence chunk IDs
+- Accepted original source sequence numbers
+- Phrase groups that must appear in accepted factual evidence
 - A category and human-readable notes
 
-Multiple evidence chunks can be accepted because the same fact may appear in a
-financial table and again as rounded narrative text.
+Source sequences and factual phrase groups remain stable when chunk IDs change.
+Multiple forms can be accepted because the same fact may appear in a financial
+table and again as rounded narrative text.
 
 The evaluation command reports these metrics:
 
