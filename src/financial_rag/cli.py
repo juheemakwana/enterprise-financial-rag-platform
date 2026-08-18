@@ -12,6 +12,10 @@ from financial_rag.chunking import (
     write_chunks_jsonl,
 )
 from financial_rag.embeddings import embed_chunks, embed_query, load_embedding_model
+from financial_rag.evaluation import (
+    load_retrieval_cases,
+    run_retrieval_evaluation,
+)
 from financial_rag.parser import load_parsed_elements, parse_filing_file
 from financial_rag.sec import get_cik_for_ticker, ingest_latest_filing
 from financial_rag.vectorstore import (
@@ -76,6 +80,23 @@ def main(arguments: list[str] | None = None) -> None:
         help="Search the local Qdrant database for relevant evidence",
     )
     parser.add_argument(
+        "--evaluate",
+        action="store_true",
+        help="Evaluate local retrieval using a saved question dataset",
+    )
+    parser.add_argument(
+        "--evaluation-dataset",
+        type=Path,
+        default=Path("evals/datasets/retrieval_cases.jsonl"),
+        help="Retrieval evaluation dataset in JSON Lines format",
+    )
+    parser.add_argument(
+        "--evaluation-limit",
+        type=int,
+        default=50,
+        help="Maximum results checked per evaluation case (default: 50)",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=5,
@@ -97,10 +118,55 @@ def main(arguments: list[str] | None = None) -> None:
         parser.error("--index requires --chunk")
     if args.search and (args.download or args.parse or args.chunk or args.index):
         parser.error("--search cannot be combined with ingestion options")
+    if args.evaluate and (
+        args.search or args.download or args.parse or args.chunk or args.index
+    ):
+        parser.error("--evaluate cannot be combined with other actions")
     if args.limit <= 0:
         parser.error("--limit must be positive")
+    if args.evaluation_limit <= 0:
+        parser.error("--evaluation-limit must be positive")
 
     ticker = args.ticker.upper()
+
+    if args.evaluate:
+        cases = [
+            case
+            for case in load_retrieval_cases(args.evaluation_dataset)
+            if case.ticker == ticker and case.form == args.form.upper()
+        ]
+        if not cases:
+            raise SystemExit(
+                f"No evaluation cases found for {ticker} {args.form.upper()}"
+            )
+
+        model = load_embedding_model()
+        client = open_local_vector_store(args.qdrant_directory)
+        try:
+            summary = run_retrieval_evaluation(
+                cases=cases,
+                model=model,
+                client=client,
+                retrieval_limit=args.evaluation_limit,
+            )
+        finally:
+            client.close()
+
+        print(f"Retrieval evaluation: {ticker} {args.form.upper()}")
+        for result in summary.results:
+            rank = result.metrics.first_relevant_rank
+            rank_text = str(rank) if rank is not None else "not found"
+            print(
+                f"- {result.case_id}: rank={rank_text}, "
+                f"RR={result.metrics.reciprocal_rank:.3f}, "
+                f"latency={result.latency_ms:.1f} ms"
+            )
+        print(f"Hit@1: {summary.hit_at_1:.3f}")
+        print(f"Hit@3: {summary.hit_at_3:.3f}")
+        print(f"Hit@5: {summary.hit_at_5:.3f}")
+        print(f"MRR: {summary.mean_reciprocal_rank:.3f}")
+        print(f"Mean latency: {summary.mean_latency_ms:.1f} ms")
+        return
 
     if args.search:
         model = load_embedding_model()
