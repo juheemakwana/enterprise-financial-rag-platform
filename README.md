@@ -32,10 +32,11 @@ SEC filing ingestion is working. The project can:
 - Create normalized 384-dimensional BGE embeddings locally
 - Persist vectors and searchable SEC metadata in local Qdrant
 - Retrieve ranked evidence with ticker and filing-form filters
+- Evaluate retrieval with a version-controlled question-and-evidence dataset
+- Measure Hit@1, Hit@3, Hit@5, mean reciprocal rank, and latency
 - Validate the workflow with automated tests
 
-Answer generation and systematic retrieval evaluation are planned for later
-stages.
+Answer generation and answer-quality evaluation are planned for later stages.
 
 ## Requirements
 
@@ -110,6 +111,17 @@ Search is local and does not require an SEC request. Use `--form 10-Q` to filter
 for a different filing form and `--qdrant-directory` to select another local
 Qdrant database.
 
+Evaluate retrieval against the saved NVDA questions:
+
+```bash
+financial-rag NVDA --evaluate
+```
+
+Evaluation is also local and does not require an SEC request. By default, it
+loads `evals/datasets/retrieval_cases.jsonl` and checks the first 50 retrieved
+chunks for each question. Use `--evaluation-limit` to change that depth or
+`--evaluation-dataset` to select another JSON Lines dataset.
+
 Raw filings are saved under `data/raw/`. Parsed filings are saved in a
 filing-specific folder under `data/parsed/`, for example:
 
@@ -175,8 +187,37 @@ again updates the same points instead of creating duplicates.
 
 For search, the question is embedded with BGE's retrieval instruction. Qdrant
 returns the closest chunks with cosine scores and official SEC citations. These
-are ranked evidence results, not a generated final answer; retrieval evaluation
-and optional reranking will be added before answer generation.
+are ranked evidence results, not a generated final answer. Optional reranking
+can be added before answer generation.
+
+## Retrieval evaluation
+
+The tracked dataset at `evals/datasets/retrieval_cases.jsonl` currently contains
+six questions about NVIDIA's fiscal 2026 10-K. Each JSON line records:
+
+- A unique case ID and question
+- Ticker and filing form filters
+- The expected factual answer
+- One or more accepted evidence chunk IDs
+- A category and human-readable notes
+
+Multiple evidence chunks can be accepted because the same fact may appear in a
+financial table and again as rounded narrative text.
+
+The evaluation command reports these metrics:
+
+- **Rank:** the position of the first accepted evidence chunk. Rank 1 is best.
+- **Hit@1:** 1 when accepted evidence is first; otherwise 0.
+- **Hit@3:** 1 when accepted evidence appears within the first three results.
+- **Hit@5:** 1 when accepted evidence appears within the first five results.
+- **Reciprocal rank (RR):** `1 / rank`. Rank 2 gives `1 / 2 = 0.5`.
+- **Mean reciprocal rank (MRR):** the average RR across all questions.
+- **Latency:** time used to embed one question and search Qdrant.
+
+The overall Hit@K values are averages across the dataset. For example, Hit@5 of
+`0.667` means four of six questions found accepted evidence within the first
+five results. `rank=not found` means no accepted evidence appeared within the
+configured evaluation limit; its RR is 0.
 
 ## Tests
 

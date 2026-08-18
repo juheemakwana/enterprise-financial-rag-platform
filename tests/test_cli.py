@@ -1,5 +1,11 @@
-from financial_rag.models import DocumentChunk, FilingMetadata, SearchResult
 from financial_rag.cli import main
+from financial_rag.evaluation import (
+    RetrievalCase,
+    RetrievalCaseMetrics,
+    RetrievalEvaluationResult,
+    RetrievalEvaluationSummary,
+)
+from financial_rag.models import DocumentChunk, FilingMetadata, SearchResult
 
 
 def make_filing_metadata(local_path):
@@ -266,6 +272,106 @@ def test_cli_searches_local_qdrant_and_prints_cited_evidence(
         "   Revenue for fiscal year 2026 was $215.9 billion.\n"
         "   SEC source: "
         "https://www.sec.gov/Archives/example/nvda.htm\n"
+    )
+
+
+def test_cli_evaluates_local_retrieval(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
+    case = RetrievalCase(
+        case_id="nvda_revenue",
+        question="What was NVIDIA's revenue?",
+        ticker="NVDA",
+        form="10-K",
+        expected_answer="$215.9 billion",
+        category="financial_table",
+        accepted_evidence_chunk_ids=("revenue-chunk",),
+        notes="Test case.",
+    )
+    result = RetrievalEvaluationResult(
+        case_id=case.case_id,
+        question=case.question,
+        retrieved_chunk_ids=("revenue-chunk",),
+        metrics=RetrievalCaseMetrics(
+            first_relevant_rank=1,
+            hit_at_1=1,
+            hit_at_3=1,
+            hit_at_5=1,
+            reciprocal_rank=1.0,
+        ),
+        latency_ms=12.3,
+    )
+    summary = RetrievalEvaluationSummary(
+        results=(result,),
+        hit_at_1=1.0,
+        hit_at_3=1.0,
+        hit_at_5=1.0,
+        mean_reciprocal_rank=1.0,
+        mean_latency_ms=12.3,
+    )
+    model = object()
+    captured_call = {}
+
+    class FakeClient:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    client = FakeClient()
+
+    monkeypatch.setattr(
+        "financial_rag.cli.load_retrieval_cases",
+        lambda dataset_path: [case],
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.load_embedding_model",
+        lambda: model,
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.open_local_vector_store",
+        lambda storage_path: client,
+    )
+
+    def fake_run_retrieval_evaluation(**kwargs):
+        captured_call.update(kwargs)
+        return summary
+
+    monkeypatch.setattr(
+        "financial_rag.cli.run_retrieval_evaluation",
+        fake_run_retrieval_evaluation,
+    )
+
+    main(
+        [
+            "NVDA",
+            "--evaluate",
+            "--evaluation-dataset",
+            str(tmp_path / "cases.jsonl"),
+            "--evaluation-limit",
+            "25",
+            "--qdrant-directory",
+            str(tmp_path / "qdrant"),
+        ]
+    )
+
+    assert captured_call == {
+        "cases": [case],
+        "model": model,
+        "client": client,
+        "retrieval_limit": 25,
+    }
+    assert client.closed is True
+    assert capsys.readouterr().out == (
+        "Retrieval evaluation: NVDA 10-K\n"
+        "- nvda_revenue: rank=1, RR=1.000, latency=12.3 ms\n"
+        "Hit@1: 1.000\n"
+        "Hit@3: 1.000\n"
+        "Hit@5: 1.000\n"
+        "MRR: 1.000\n"
+        "Mean latency: 12.3 ms\n"
     )
 
 
