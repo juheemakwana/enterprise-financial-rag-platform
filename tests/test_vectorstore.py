@@ -1,4 +1,7 @@
+from dataclasses import replace
 from pathlib import Path
+
+import pytest
 
 from qdrant_client import QdrantClient, models
 
@@ -9,6 +12,7 @@ from financial_rag.vectorstore import (
     ensure_collection,
     list_filtered_chunks,
     point_id_for_chunk,
+    replace_filing_chunks,
     search_similar_chunks,
     upsert_embedded_chunks,
 )
@@ -128,3 +132,61 @@ def test_list_filtered_chunks_loads_all_matching_payloads() -> None:
         [item.chunk for item in embedded_chunks],
         key=lambda chunk: chunk.chunk_id,
     )
+
+
+def test_replace_filing_chunks_removes_only_matching_accession() -> None:
+    client = QdrantClient(":memory:")
+    original_chunks = make_embedded_chunks()
+    other_filing = replace(
+        original_chunks[0].chunk.filing,
+        filing_date="2025-02-26",
+        accession_number="0001045810-25-000050",
+        local_path=Path("data/raw/NVDA_10-K_2025-02-26.html"),
+    )
+    other_chunk = EmbeddedChunk(
+        chunk=replace(
+            original_chunks[0].chunk,
+            chunk_id="NVDA_10-K_2025-02-26-00000",
+            filing=other_filing,
+        ),
+        vector=original_chunks[0].vector,
+    )
+    replacement = EmbeddedChunk(
+        chunk=replace(
+            original_chunks[0].chunk,
+            chunk_id="NVDA_10-K_2026-02-25-row-00000",
+            content="Company: NVIDIA CORP. Revenue: $215,938 million.",
+        ),
+        vector=original_chunks[0].vector,
+    )
+    upsert_embedded_chunks(client, [*original_chunks, other_chunk])
+
+    count = replace_filing_chunks(client, [replacement])
+
+    assert count == 1
+    collection = client.get_collection(DEFAULT_COLLECTION_NAME)
+    assert collection.points_count == 2
+    remaining_chunks = list_filtered_chunks(client, ticker="NVDA", form="10-K")
+    assert {chunk.chunk_id for chunk in remaining_chunks} == {
+        "NVDA_10-K_2025-02-26-00000",
+        "NVDA_10-K_2026-02-25-row-00000",
+    }
+
+
+def test_replace_filing_chunks_rejects_mixed_accessions_before_delete() -> None:
+    client = QdrantClient(":memory:")
+    original_chunks = make_embedded_chunks()
+    upsert_embedded_chunks(client, original_chunks)
+    different_filing = replace(
+        original_chunks[0].chunk.filing,
+        accession_number="different-accession",
+    )
+    mixed_chunk = replace(
+        original_chunks[0],
+        chunk=replace(original_chunks[0].chunk, filing=different_filing),
+    )
+
+    with pytest.raises(ValueError, match="share one accession number"):
+        replace_filing_chunks(client, [original_chunks[0], mixed_chunk])
+
+    assert client.get_collection(DEFAULT_COLLECTION_NAME).points_count == 2

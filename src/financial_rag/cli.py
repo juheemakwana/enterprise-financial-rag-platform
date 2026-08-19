@@ -21,7 +21,7 @@ from financial_rag.retrieval import hybrid_search_chunks
 from financial_rag.sec import get_cik_for_ticker, ingest_latest_filing
 from financial_rag.vectorstore import (
     open_local_vector_store,
-    upsert_embedded_chunks,
+    replace_filing_chunks,
 )
 
 
@@ -253,7 +253,7 @@ def main(arguments: list[str] | None = None) -> None:
                     )
                     client = open_local_vector_store(args.qdrant_directory)
                     try:
-                        indexed_count = upsert_embedded_chunks(
+                        indexed_count = replace_filing_chunks(
                             client,
                             embedded_chunks,
                         )

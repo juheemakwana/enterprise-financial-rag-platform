@@ -440,7 +440,7 @@ def test_cli_indexes_chunks_and_closes_qdrant(
         lambda storage_path: client,
     )
     monkeypatch.setattr(
-        "financial_rag.cli.upsert_embedded_chunks",
+        "financial_rag.cli.replace_filing_chunks",
         lambda selected_client, records: len(records),
     )
 

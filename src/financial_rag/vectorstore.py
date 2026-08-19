@@ -136,6 +136,54 @@ def upsert_embedded_chunks(
     return len(embedded_chunks)
 
 
+def replace_filing_chunks(
+    client: QdrantClient,
+    embedded_chunks: list[EmbeddedChunk],
+    collection_name: str = DEFAULT_COLLECTION_NAME,
+    batch_size: int = 64,
+) -> int:
+    """Replace every indexed chunk for one SEC filing accession."""
+    if not embedded_chunks:
+        raise ValueError("At least one embedded chunk is required")
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+
+    accession_numbers = {
+        item.chunk.filing.accession_number for item in embedded_chunks
+    }
+    if len(accession_numbers) != 1:
+        raise ValueError("Replacement chunks must share one accession number")
+    if any(
+        len(item.vector) != EMBEDDING_DIMENSIONS for item in embedded_chunks
+    ):
+        raise ValueError(
+            f"Embedding vector must contain {EMBEDDING_DIMENSIONS} dimensions"
+        )
+
+    accession_number = next(iter(accession_numbers))
+    ensure_collection(client, collection_name)
+    client.delete(
+        collection_name=collection_name,
+        points_selector=models.FilterSelector(
+            filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="accession_number",
+                        match=models.MatchValue(value=accession_number),
+                    )
+                ]
+            )
+        ),
+        wait=True,
+    )
+    return upsert_embedded_chunks(
+        client=client,
+        embedded_chunks=embedded_chunks,
+        collection_name=collection_name,
+        batch_size=batch_size,
+    )
+
+
 def _chunk_from_payload(payload: dict) -> DocumentChunk:
     """Rebuild one document chunk from stored Qdrant payload fields."""
     filing = FilingMetadata(

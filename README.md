@@ -183,7 +183,9 @@ fields:
 - Official SEC URL and local source path
 
 Chunk IDs are converted into stable UUIDs before insertion. Running `--index`
-again updates the same points instead of creating duplicates.
+again removes points for that exact SEC accession before inserting its current
+chunks. Other filings remain untouched, and obsolete chunks cannot remain in
+the collection after a chunking-strategy change.
 
 For search, the question is embedded with BGE's retrieval instruction. Qdrant
 returns semantic candidates while a local BM25 calculation ranks exact words
