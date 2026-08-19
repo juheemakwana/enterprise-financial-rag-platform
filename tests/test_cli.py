@@ -244,7 +244,7 @@ def test_cli_searches_local_qdrant_and_prints_cited_evidence(
         return expected_results
 
     monkeypatch.setattr(
-        "financial_rag.cli.search_similar_chunks",
+        "financial_rag.cli.hybrid_search_chunks",
         fake_search,
     )
 
@@ -261,6 +261,7 @@ def test_cli_searches_local_qdrant_and_prints_cited_evidence(
     )
 
     assert captured_search["client"] is client
+    assert captured_search["question"] == "What was revenue in fiscal 2026?"
     assert captured_search["query_vector"] == query_vector
     assert captured_search["limit"] == 1
     assert captured_search["ticker"] == "NVDA"

@@ -7,6 +7,7 @@ from financial_rag.models import DocumentChunk, EmbeddedChunk, FilingMetadata
 from financial_rag.vectorstore import (
     DEFAULT_COLLECTION_NAME,
     ensure_collection,
+    list_filtered_chunks,
     point_id_for_chunk,
     search_similar_chunks,
     upsert_embedded_chunks,
@@ -109,3 +110,21 @@ def test_search_similar_chunks_returns_ranked_typed_results() -> None:
     assert results[0].score == 1.0
     assert results[1].chunk == embedded_chunks[1].chunk
     assert results[0].chunk.filing.source_url.startswith("https://www.sec.gov/")
+
+
+def test_list_filtered_chunks_loads_all_matching_payloads() -> None:
+    client = QdrantClient(":memory:")
+    embedded_chunks = make_embedded_chunks()
+    upsert_embedded_chunks(client, embedded_chunks)
+
+    chunks = list_filtered_chunks(
+        client,
+        ticker="nvda",
+        form="10-k",
+        batch_size=1,
+    )
+
+    assert sorted(chunks, key=lambda chunk: chunk.chunk_id) == sorted(
+        [item.chunk for item in embedded_chunks],
+        key=lambda chunk: chunk.chunk_id,
+    )

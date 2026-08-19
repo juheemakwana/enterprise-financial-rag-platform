@@ -123,10 +123,11 @@ def test_run_retrieval_evaluation(monkeypatch) -> None:
     def fake_embed_query(question, model):
         return question
 
-    def fake_search_similar_chunks(
-        client, query_vector, limit, ticker, form
+    def fake_hybrid_search_chunks(
+        client, question, query_vector, limit, ticker, form
     ):
         assert client == "fake-client"
+        assert question == query_vector
         assert limit == 5
         assert ticker == "NVDA"
         assert form == "10-K"
@@ -139,8 +140,8 @@ def test_run_retrieval_evaluation(monkeypatch) -> None:
         "financial_rag.embeddings.embed_query", fake_embed_query
     )
     monkeypatch.setattr(
-        "financial_rag.vectorstore.search_similar_chunks",
-        fake_search_similar_chunks,
+        "financial_rag.retrieval.hybrid_search_chunks",
+        fake_hybrid_search_chunks,
     )
 
     summary = run_retrieval_evaluation(

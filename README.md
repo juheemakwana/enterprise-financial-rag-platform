@@ -31,7 +31,7 @@ SEC filing ingestion is working. The project can:
 - Save chunks and SEC provenance as JSON Lines
 - Create normalized 384-dimensional BGE embeddings locally
 - Persist vectors and searchable SEC metadata in local Qdrant
-- Retrieve ranked evidence with ticker and filing-form filters
+- Retrieve hybrid-ranked evidence with ticker and filing-form filters
 - Evaluate retrieval with a version-controlled question-and-evidence dataset
 - Measure Hit@1, Hit@3, Hit@5, mean reciprocal rank, and latency
 - Validate the workflow with automated tests
@@ -186,9 +186,15 @@ Chunk IDs are converted into stable UUIDs before insertion. Running `--index`
 again updates the same points instead of creating duplicates.
 
 For search, the question is embedded with BGE's retrieval instruction. Qdrant
-returns the closest chunks with cosine scores and official SEC citations. These
-are ranked evidence results, not a generated final answer. Optional reranking
-can be added before answer generation.
+returns semantic candidates while a local BM25 calculation ranks exact words
+and numbers. Reciprocal-rank fusion combines both lists, and the final results
+include official SEC citations. These are ranked evidence results, not a
+generated final answer.
+
+The current BM25 implementation scans chunks matching the ticker and form from
+local Qdrant. This is appropriate for the learning-scale local corpus. A larger
+enterprise deployment would move lexical ranking to a persistent search engine
+such as OpenSearch or Elasticsearch.
 
 ## Retrieval evaluation
 

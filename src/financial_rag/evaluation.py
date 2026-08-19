@@ -121,14 +121,15 @@ def run_retrieval_evaluation(
         raise ValueError("retrieval_limit must be positive")
 
     from financial_rag.embeddings import embed_query
-    from financial_rag.vectorstore import search_similar_chunks
+    from financial_rag.retrieval import hybrid_search_chunks
 
     results = []
     for case in cases:
         started_at = perf_counter()
         query_vector = embed_query(case.question, model)
-        search_results = search_similar_chunks(
+        search_results = hybrid_search_chunks(
             client=client,
+            question=case.question,
             query_vector=query_vector,
             limit=retrieval_limit,
             ticker=case.ticker,

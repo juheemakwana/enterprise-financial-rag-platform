@@ -17,6 +17,29 @@ from financial_rag.models import (
 DEFAULT_COLLECTION_NAME = "sec_filing_chunks"
 
 
+def _build_query_filter(
+    ticker: str | None,
+    form: str | None,
+) -> models.Filter | None:
+    """Build the shared ticker and filing-form payload filter."""
+    conditions = []
+    if ticker:
+        conditions.append(
+            models.FieldCondition(
+                key="ticker",
+                match=models.MatchValue(value=ticker.upper()),
+            )
+        )
+    if form:
+        conditions.append(
+            models.FieldCondition(
+                key="form",
+                match=models.MatchValue(value=form.upper()),
+            )
+        )
+    return models.Filter(must=conditions) if conditions else None
+
+
 def open_local_vector_store(storage_path: Path) -> QdrantClient:
     """Open a persistent local Qdrant database without running a server."""
     storage_path.mkdir(parents=True, exist_ok=True)
@@ -152,27 +175,10 @@ def search_similar_chunks(
     if limit <= 0:
         raise ValueError("limit must be positive")
 
-    conditions = []
-    if ticker:
-        conditions.append(
-            models.FieldCondition(
-                key="ticker",
-                match=models.MatchValue(value=ticker.upper()),
-            )
-        )
-    if form:
-        conditions.append(
-            models.FieldCondition(
-                key="form",
-                match=models.MatchValue(value=form.upper()),
-            )
-        )
-    query_filter = models.Filter(must=conditions) if conditions else None
-
     response = client.query_points(
         collection_name=collection_name,
         query=list(query_vector),
-        query_filter=query_filter,
+        query_filter=_build_query_filter(ticker, form),
         limit=limit,
         with_payload=True,
         with_vectors=False,
@@ -184,3 +190,32 @@ def search_similar_chunks(
         )
         for point in response.points
     ]
+
+
+def list_filtered_chunks(
+    client: QdrantClient,
+    collection_name: str = DEFAULT_COLLECTION_NAME,
+    ticker: str | None = None,
+    form: str | None = None,
+    batch_size: int = 256,
+) -> list[DocumentChunk]:
+    """Load filtered chunk payloads from Qdrant in bounded batches."""
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+
+    chunks = []
+    offset = None
+    while True:
+        records, offset = client.scroll(
+            collection_name=collection_name,
+            scroll_filter=_build_query_filter(ticker, form),
+            limit=batch_size,
+            offset=offset,
+            with_payload=True,
+            with_vectors=False,
+        )
+        chunks.extend(_chunk_from_payload(record.payload) for record in records)
+        if offset is None:
+            break
+
+    return chunks
