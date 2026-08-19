@@ -55,6 +55,7 @@ class FakeTokenizer:
 def make_filing_metadata() -> FilingMetadata:
     return FilingMetadata(
         ticker="NVDA",
+        company_name="NVIDIA CORP",
         cik="0001045810",
         form="10-K",
         filing_date="2026-02-25",
@@ -150,7 +151,7 @@ def test_chunk_text_elements_splits_one_oversized_block() -> None:
     assert [chunk.token_count for chunk in chunks] == [4, 4, 3]
 
 
-def test_chunk_table_element_keeps_small_table_intact() -> None:
+def test_chunk_table_element_adds_context_to_small_table_row() -> None:
     element = DocumentElement(
         12,
         "table",
@@ -168,11 +169,18 @@ def test_chunk_table_element_keeps_small_table_intact() -> None:
     assert len(chunks) == 1
     assert chunks[0].sequence == 4
     assert chunks[0].chunk_id == "NVDA_10-K_2026-02-25-00004"
-    assert chunks[0].content == element.content
+    assert chunks[0].content == (
+        "Company: NVIDIA CORP (NVDA)\n"
+        "Form: 10-K\n\n"
+        "Table context:\n"
+        "Year | Revenue\n\n"
+        "Data row:\n"
+        "2026 | 130,500"
+    )
     assert chunks[0].source_sequences == (12,)
 
 
-def test_chunk_table_element_splits_rows_and_repeats_header() -> None:
+def test_chunk_table_element_creates_one_chunk_per_row() -> None:
     element = DocumentElement(
         12,
         "table",
@@ -186,15 +194,81 @@ def test_chunk_table_element_splits_rows_and_repeats_header() -> None:
         element=element,
         filing=make_filing_metadata(),
         tokenizer=FakeTokenizer(),
-        chunk_tokens=15,
+        chunk_tokens=25,
     )
 
     assert [chunk.content for chunk in chunks] == [
-        "| Year | Revenue |\n| --- | --- |\n| 2026 | 130,500 |",
-        "| Year | Revenue |\n| --- | --- |\n| 2025 | 60,900 |",
+        "Company: NVIDIA CORP (NVDA)\nForm: 10-K\n\n"
+        "Table context:\nYear | Revenue\n\nData row:\n2026 | 130,500",
+        "Company: NVIDIA CORP (NVDA)\nForm: 10-K\n\n"
+        "Table context:\nYear | Revenue\n\nData row:\n2025 | 60,900",
     ]
     assert [chunk.source_sequences for chunk in chunks] == [(12,), (12,)]
-    assert all(chunk.token_count <= 15 for chunk in chunks)
+    assert all(chunk.token_count <= 25 for chunk in chunks)
+
+
+def test_chunk_table_element_repeats_multirow_financial_context() -> None:
+    element = DocumentElement(
+        483,
+        "table",
+        "|  |  | Year Ended |  |  |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "|  | Jan 25, 2026 | Jan 26, 2025 | $ Change | % Change |\n"
+        "|  | ($ in millions) |  |  |  |\n"
+        "| Research and development | $ | 18,497 | $ | 12,914 | 43 | % |\n"
+        "| Sales, general and administrative | $ | 4,579 | $ | 3,491 | 31 | % |",
+    )
+
+    chunks = chunk_table_element(
+        element=element,
+        filing=make_filing_metadata(),
+        tokenizer=FakeTokenizer(),
+        chunk_tokens=50,
+    )
+
+    assert [chunk.content for chunk in chunks] == [
+        "Company: NVIDIA CORP (NVDA)\n"
+        "Form: 10-K\n\n"
+        "Table context:\n"
+        "Year Ended\n"
+        "Jan 25, 2026 | Jan 26, 2025 | $ Change | % Change\n"
+        "($ in millions)\n\n"
+        "Data row:\n"
+        "Research and development | $18,497 | $12,914 | 43%",
+        "Company: NVIDIA CORP (NVDA)\n"
+        "Form: 10-K\n\n"
+        "Table context:\n"
+        "Year Ended\n"
+        "Jan 25, 2026 | Jan 26, 2025 | $ Change | % Change\n"
+        "($ in millions)\n\n"
+        "Data row:\n"
+        "Sales, general and administrative | $4,579 | $3,491 | 31%",
+    ]
+    assert [chunk.source_sequences for chunk in chunks] == [(483,), (483,)]
+
+
+def test_chunk_table_element_preserves_single_row_table() -> None:
+    element = DocumentElement(
+        3,
+        "table",
+        "| Annual report | ☒ |\n| --- | --- |",
+    )
+
+    chunks = chunk_table_element(
+        element=element,
+        filing=make_filing_metadata(),
+        tokenizer=FakeTokenizer(),
+        chunk_tokens=20,
+    )
+
+    assert len(chunks) == 1
+    assert chunks[0].content == (
+        "Company: NVIDIA CORP (NVDA)\n"
+        "Form: 10-K\n\n"
+        "Table row:\n"
+        "Annual report | ☒"
+    )
+    assert chunks[0].source_sequences == (3,)
 
 
 def test_chunk_document_elements_preserves_text_and_table_order() -> None:
@@ -257,6 +331,7 @@ def test_write_chunks_jsonl_preserves_content_and_provenance(tmp_path) -> None:
     assert record["chunk_id"] == "NVDA_10-K_2026-02-25-00000"
     assert record["source_sequences"] == [0, 1]
     assert record["filing"]["ticker"] == "NVDA"
+    assert record["filing"]["company_name"] == "NVIDIA CORP"
     assert record["filing"]["accession_number"] == (
         "0001045810-26-000021"
     )

@@ -120,6 +120,7 @@ def test_fetch_company_submissions_builds_cik_url(monkeypatch) -> None:
 
 def test_find_latest_filing_selects_requested_form() -> None:
     submissions = {
+        "name": "NVIDIA CORP",
         "filings": {
             "recent": {
                 "form": ["10-Q", "10-K", "8-K"],
@@ -224,6 +225,7 @@ def test_ingest_latest_filing_connects_complete_download_flow(
         }
     }
     submissions = {
+        "name": "NVIDIA CORP",
         "filings": {
             "recent": {
                 "form": ["10-K"],
@@ -262,6 +264,7 @@ def test_ingest_latest_filing_connects_complete_download_flow(
     )
 
     assert filing.ticker == "NVDA"
+    assert filing.company_name == "NVIDIA CORP"
     assert filing.cik == "0001045810"
     assert filing.form == "10-K"
     assert filing.filing_date == "2025-02-26"

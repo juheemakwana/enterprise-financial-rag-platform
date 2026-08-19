@@ -17,11 +17,11 @@ from financial_rag.evaluation import (
     run_retrieval_evaluation,
 )
 from financial_rag.parser import load_parsed_elements, parse_filing_file
+from financial_rag.retrieval import hybrid_search_chunks
 from financial_rag.sec import get_cik_for_ticker, ingest_latest_filing
 from financial_rag.vectorstore import (
     open_local_vector_store,
-    search_similar_chunks,
-    upsert_embedded_chunks,
+    replace_filing_chunks,
 )
 
 
@@ -173,8 +173,9 @@ def main(arguments: list[str] | None = None) -> None:
         query_vector = embed_query(args.search, model)
         client = open_local_vector_store(args.qdrant_directory)
         try:
-            results = search_similar_chunks(
+            results = hybrid_search_chunks(
                 client=client,
+                question=args.search,
                 query_vector=query_vector,
                 limit=args.limit,
                 ticker=ticker,
@@ -252,7 +253,7 @@ def main(arguments: list[str] | None = None) -> None:
                     )
                     client = open_local_vector_store(args.qdrant_directory)
                     try:
-                        indexed_count = upsert_embedded_chunks(
+                        indexed_count = replace_filing_chunks(
                             client,
                             embedded_chunks,
                         )

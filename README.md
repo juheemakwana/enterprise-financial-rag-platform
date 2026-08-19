@@ -31,7 +31,7 @@ SEC filing ingestion is working. The project can:
 - Save chunks and SEC provenance as JSON Lines
 - Create normalized 384-dimensional BGE embeddings locally
 - Persist vectors and searchable SEC metadata in local Qdrant
-- Retrieve ranked evidence with ticker and filing-form filters
+- Retrieve hybrid-ranked evidence with ticker and filing-form filters
 - Evaluate retrieval with a version-controlled question-and-evidence dataset
 - Measure Hit@1, Hit@3, Hit@5, mean reciprocal rank, and latency
 - Validate the workflow with automated tests
@@ -179,16 +179,24 @@ similarity. Every vector stores the original chunk content and these payload
 fields:
 
 - Chunk ID, type, sequence, token count, and source element sequences
-- Ticker, CIK, form, filing date, and accession number
+- Company name, ticker, CIK, form, filing date, and accession number
 - Official SEC URL and local source path
 
 Chunk IDs are converted into stable UUIDs before insertion. Running `--index`
-again updates the same points instead of creating duplicates.
+again removes points for that exact SEC accession before inserting its current
+chunks. Other filings remain untouched, and obsolete chunks cannot remain in
+the collection after a chunking-strategy change.
 
 For search, the question is embedded with BGE's retrieval instruction. Qdrant
-returns the closest chunks with cosine scores and official SEC citations. These
-are ranked evidence results, not a generated final answer. Optional reranking
-can be added before answer generation.
+returns semantic candidates while a local BM25 calculation ranks exact words
+and numbers. Reciprocal-rank fusion combines both lists, and the final results
+include official SEC citations. These are ranked evidence results, not a
+generated final answer.
+
+The current BM25 implementation scans chunks matching the ticker and form from
+local Qdrant. This is appropriate for the learning-scale local corpus. A larger
+enterprise deployment would move lexical ranking to a persistent search engine
+such as OpenSearch or Elasticsearch.
 
 ## Retrieval evaluation
 
@@ -198,11 +206,13 @@ six questions about NVIDIA's fiscal 2026 10-K. Each JSON line records:
 - A unique case ID and question
 - Ticker and filing form filters
 - The expected factual answer
-- One or more accepted evidence chunk IDs
+- Accepted original source sequence numbers
+- Phrase groups that must appear in accepted factual evidence
 - A category and human-readable notes
 
-Multiple evidence chunks can be accepted because the same fact may appear in a
-financial table and again as rounded narrative text.
+Source sequences and factual phrase groups remain stable when chunk IDs change.
+Multiple forms can be accepted because the same fact may appear in a financial
+table and again as rounded narrative text.
 
 The evaluation command reports these metrics:
 

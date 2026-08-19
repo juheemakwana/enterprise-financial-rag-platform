@@ -1,4 +1,7 @@
+from dataclasses import replace
 from pathlib import Path
+
+import pytest
 
 from qdrant_client import QdrantClient, models
 
@@ -7,7 +10,9 @@ from financial_rag.models import DocumentChunk, EmbeddedChunk, FilingMetadata
 from financial_rag.vectorstore import (
     DEFAULT_COLLECTION_NAME,
     ensure_collection,
+    list_filtered_chunks,
     point_id_for_chunk,
+    replace_filing_chunks,
     search_similar_chunks,
     upsert_embedded_chunks,
 )
@@ -16,6 +21,7 @@ from financial_rag.vectorstore import (
 def make_embedded_chunks() -> list[EmbeddedChunk]:
     filing = FilingMetadata(
         ticker="NVDA",
+        company_name="NVIDIA CORP",
         cik="0001045810",
         form="10-K",
         filing_date="2026-02-25",
@@ -82,6 +88,7 @@ def test_upsert_embedded_chunks_preserves_payload_without_duplicates() -> None:
         with_payload=True,
     )[0]
     assert point.payload["ticker"] == "NVDA"
+    assert point.payload["company_name"] == "NVIDIA CORP"
     assert point.payload["chunk_type"] == "text"
     assert point.payload["source_sequences"] == [0, 1]
     assert point.payload["accession_number"] == "0001045810-26-000021"
@@ -107,3 +114,79 @@ def test_search_similar_chunks_returns_ranked_typed_results() -> None:
     assert results[0].score == 1.0
     assert results[1].chunk == embedded_chunks[1].chunk
     assert results[0].chunk.filing.source_url.startswith("https://www.sec.gov/")
+
+
+def test_list_filtered_chunks_loads_all_matching_payloads() -> None:
+    client = QdrantClient(":memory:")
+    embedded_chunks = make_embedded_chunks()
+    upsert_embedded_chunks(client, embedded_chunks)
+
+    chunks = list_filtered_chunks(
+        client,
+        ticker="nvda",
+        form="10-k",
+        batch_size=1,
+    )
+
+    assert sorted(chunks, key=lambda chunk: chunk.chunk_id) == sorted(
+        [item.chunk for item in embedded_chunks],
+        key=lambda chunk: chunk.chunk_id,
+    )
+
+
+def test_replace_filing_chunks_removes_only_matching_accession() -> None:
+    client = QdrantClient(":memory:")
+    original_chunks = make_embedded_chunks()
+    other_filing = replace(
+        original_chunks[0].chunk.filing,
+        filing_date="2025-02-26",
+        accession_number="0001045810-25-000050",
+        local_path=Path("data/raw/NVDA_10-K_2025-02-26.html"),
+    )
+    other_chunk = EmbeddedChunk(
+        chunk=replace(
+            original_chunks[0].chunk,
+            chunk_id="NVDA_10-K_2025-02-26-00000",
+            filing=other_filing,
+        ),
+        vector=original_chunks[0].vector,
+    )
+    replacement = EmbeddedChunk(
+        chunk=replace(
+            original_chunks[0].chunk,
+            chunk_id="NVDA_10-K_2026-02-25-row-00000",
+            content="Company: NVIDIA CORP. Revenue: $215,938 million.",
+        ),
+        vector=original_chunks[0].vector,
+    )
+    upsert_embedded_chunks(client, [*original_chunks, other_chunk])
+
+    count = replace_filing_chunks(client, [replacement])
+
+    assert count == 1
+    collection = client.get_collection(DEFAULT_COLLECTION_NAME)
+    assert collection.points_count == 2
+    remaining_chunks = list_filtered_chunks(client, ticker="NVDA", form="10-K")
+    assert {chunk.chunk_id for chunk in remaining_chunks} == {
+        "NVDA_10-K_2025-02-26-00000",
+        "NVDA_10-K_2026-02-25-row-00000",
+    }
+
+
+def test_replace_filing_chunks_rejects_mixed_accessions_before_delete() -> None:
+    client = QdrantClient(":memory:")
+    original_chunks = make_embedded_chunks()
+    upsert_embedded_chunks(client, original_chunks)
+    different_filing = replace(
+        original_chunks[0].chunk.filing,
+        accession_number="different-accession",
+    )
+    mixed_chunk = replace(
+        original_chunks[0],
+        chunk=replace(original_chunks[0].chunk, filing=different_filing),
+    )
+
+    with pytest.raises(ValueError, match="share one accession number"):
+        replace_filing_chunks(client, [original_chunks[0], mixed_chunk])
+
+    assert client.get_collection(DEFAULT_COLLECTION_NAME).points_count == 2

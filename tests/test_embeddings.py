@@ -28,6 +28,7 @@ class FakeEmbeddingModel:
 def make_chunks() -> list[DocumentChunk]:
     filing = FilingMetadata(
         ticker="NVDA",
+        company_name="NVIDIA CORP",
         cik="0001045810",
         form="10-K",
         filing_date="2026-02-25",

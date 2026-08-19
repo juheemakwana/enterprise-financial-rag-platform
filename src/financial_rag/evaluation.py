@@ -9,11 +9,12 @@ from time import perf_counter
 from qdrant_client import QdrantClient
 
 from financial_rag.embeddings import EmbeddingModel
+from financial_rag.models import DocumentChunk
 
 
 @dataclass(frozen=True)
 class RetrievalCase:
-    """One question with its expected answer and accepted evidence chunks."""
+    """One question with stable rules describing accepted filing evidence."""
 
     case_id: str
     question: str
@@ -21,7 +22,8 @@ class RetrievalCase:
     form: str
     expected_answer: str
     category: str
-    accepted_evidence_chunk_ids: tuple[str, ...]
+    accepted_source_sequences: tuple[int, ...]
+    accepted_evidence_phrase_groups: tuple[tuple[str, ...], ...]
     notes: str
 
 
@@ -60,19 +62,15 @@ class RetrievalEvaluationSummary:
 
 
 def calculate_case_metrics(
-    retrieved_chunk_ids: list[str],
-    accepted_evidence_chunk_ids: tuple[str, ...],
+    retrieved_chunks: list[DocumentChunk],
+    case: RetrievalCase,
 ) -> RetrievalCaseMetrics:
     """Calculate rank-based metrics for one retrieval case."""
-    if not accepted_evidence_chunk_ids:
-        raise ValueError("At least one accepted evidence chunk ID is required")
-
-    accepted_ids = set(accepted_evidence_chunk_ids)
     first_relevant_rank = next(
         (
             rank
-            for rank, chunk_id in enumerate(retrieved_chunk_ids, start=1)
-            if chunk_id in accepted_ids
+            for rank, chunk in enumerate(retrieved_chunks, start=1)
+            if chunk_matches_case(chunk, case)
         ),
         None,
     )
@@ -94,6 +92,22 @@ def calculate_case_metrics(
     )
 
 
+def chunk_matches_case(chunk: DocumentChunk, case: RetrievalCase) -> bool:
+    """Return whether a chunk contains accepted source-backed evidence."""
+    accepted_sources = set(case.accepted_source_sequences)
+    if not accepted_sources.intersection(chunk.source_sequences):
+        return False
+
+    normalized_content = " ".join(chunk.content.casefold().split())
+    return any(
+        all(
+            " ".join(phrase.casefold().split()) in normalized_content
+            for phrase in phrase_group
+        )
+        for phrase_group in case.accepted_evidence_phrase_groups
+    )
+
+
 def run_retrieval_evaluation(
     cases: list[RetrievalCase],
     model: EmbeddingModel,
@@ -107,14 +121,15 @@ def run_retrieval_evaluation(
         raise ValueError("retrieval_limit must be positive")
 
     from financial_rag.embeddings import embed_query
-    from financial_rag.vectorstore import search_similar_chunks
+    from financial_rag.retrieval import hybrid_search_chunks
 
     results = []
     for case in cases:
         started_at = perf_counter()
         query_vector = embed_query(case.question, model)
-        search_results = search_similar_chunks(
+        search_results = hybrid_search_chunks(
             client=client,
+            question=case.question,
             query_vector=query_vector,
             limit=retrieval_limit,
             ticker=case.ticker,
@@ -125,8 +140,8 @@ def run_retrieval_evaluation(
             result.chunk.chunk_id for result in search_results
         )
         metrics = calculate_case_metrics(
-            retrieved_chunk_ids=list(retrieved_chunk_ids),
-            accepted_evidence_chunk_ids=case.accepted_evidence_chunk_ids,
+            retrieved_chunks=[result.chunk for result in search_results],
+            case=case,
         )
         results.append(
             RetrievalEvaluationResult(
@@ -186,18 +201,39 @@ def load_retrieval_cases(input_path: Path) -> list[RetrievalCase]:
             if case_id in seen_case_ids:
                 raise ValueError(f"Case IDs must be unique: {case_id}")
 
-            evidence_ids = record.get("accepted_evidence_chunk_ids")
+            source_sequences = record.get("accepted_source_sequences")
             if (
-                not isinstance(evidence_ids, list)
-                or not evidence_ids
+                not isinstance(source_sequences, list)
+                or not source_sequences
                 or not all(
-                    isinstance(chunk_id, str) and chunk_id.strip()
-                    for chunk_id in evidence_ids
+                    isinstance(sequence, int)
+                    and not isinstance(sequence, bool)
+                    and sequence >= 0
+                    for sequence in source_sequences
                 )
             ):
                 raise ValueError(
-                    f"Line {line_number}: accepted evidence IDs "
-                    "must be a non-empty list of text values"
+                    f"Line {line_number}: accepted source sequences "
+                    "must be a non-empty list of non-negative integers"
+                )
+
+            phrase_groups = record.get("accepted_evidence_phrase_groups")
+            if (
+                not isinstance(phrase_groups, list)
+                or not phrase_groups
+                or not all(
+                    isinstance(group, list)
+                    and group
+                    and all(
+                        isinstance(phrase, str) and phrase.strip()
+                        for phrase in group
+                    )
+                    for group in phrase_groups
+                )
+            ):
+                raise ValueError(
+                    f"Line {line_number}: accepted evidence phrase groups "
+                    "must be a non-empty list of non-empty text lists"
                 )
 
             cases.append(
@@ -210,8 +246,10 @@ def load_retrieval_cases(input_path: Path) -> list[RetrievalCase]:
                         record, "expected_answer", line_number
                     ),
                     category=_required_text(record, "category", line_number),
-                    accepted_evidence_chunk_ids=tuple(
-                        chunk_id.strip() for chunk_id in evidence_ids
+                    accepted_source_sequences=tuple(source_sequences),
+                    accepted_evidence_phrase_groups=tuple(
+                        tuple(phrase.strip() for phrase in group)
+                        for group in phrase_groups
                     ),
                     notes=_required_text(record, "notes", line_number),
                 )

@@ -11,6 +11,7 @@ from financial_rag.models import DocumentChunk, FilingMetadata, SearchResult
 def make_filing_metadata(local_path):
     return FilingMetadata(
         ticker="NVDA",
+        company_name="NVIDIA CORP",
         cik="0001045810",
         form="10-K",
         filing_date="2026-02-25",
@@ -243,7 +244,7 @@ def test_cli_searches_local_qdrant_and_prints_cited_evidence(
         return expected_results
 
     monkeypatch.setattr(
-        "financial_rag.cli.search_similar_chunks",
+        "financial_rag.cli.hybrid_search_chunks",
         fake_search,
     )
 
@@ -260,6 +261,7 @@ def test_cli_searches_local_qdrant_and_prints_cited_evidence(
     )
 
     assert captured_search["client"] is client
+    assert captured_search["question"] == "What was revenue in fiscal 2026?"
     assert captured_search["query_vector"] == query_vector
     assert captured_search["limit"] == 1
     assert captured_search["ticker"] == "NVDA"
@@ -287,7 +289,8 @@ def test_cli_evaluates_local_retrieval(
         form="10-K",
         expected_answer="$215.9 billion",
         category="financial_table",
-        accepted_evidence_chunk_ids=("revenue-chunk",),
+        accepted_source_sequences=(436,),
+        accepted_evidence_phrase_groups=(("revenue", "215.9 billion"),),
         notes="Test case.",
     )
     result = RetrievalEvaluationResult(
@@ -437,7 +440,7 @@ def test_cli_indexes_chunks_and_closes_qdrant(
         lambda storage_path: client,
     )
     monkeypatch.setattr(
-        "financial_rag.cli.upsert_embedded_chunks",
+        "financial_rag.cli.replace_filing_chunks",
         lambda selected_client, records: len(records),
     )
 
