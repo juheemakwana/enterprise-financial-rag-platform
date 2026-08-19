@@ -277,6 +277,88 @@ def test_cli_searches_local_qdrant_and_prints_cited_evidence(
     )
 
 
+def test_cli_answers_with_retrieved_evidence_and_prints_citations(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
+    filing = make_filing_metadata(
+        tmp_path / "raw" / "NVDA_10-K_2026-02-25.html"
+    )
+    chunk = DocumentChunk(
+        chunk_id="NVDA_10-K_2026-02-25-00134",
+        sequence=134,
+        chunk_type="text",
+        content="Revenue for fiscal year 2026 was $215.9 billion.",
+        token_count=12,
+        source_sequences=(437, 438),
+        filing=filing,
+    )
+    expected_results = [SearchResult(score=0.8019, chunk=chunk)]
+    embedding_model = object()
+    query_vector = tuple([0.0] * 384)
+
+    class FakeClient:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    class FakeAnswerModel:
+        prompts = []
+
+        def generate(self, prompt):
+            self.prompts.append(prompt)
+            return "NVIDIA's fiscal 2026 revenue was $215.9 billion [1]."
+
+    client = FakeClient()
+    answer_model = FakeAnswerModel()
+
+    monkeypatch.setattr(
+        "financial_rag.cli.load_embedding_model",
+        lambda: embedding_model,
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.embed_query",
+        lambda question, selected_model: query_vector,
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.open_local_vector_store",
+        lambda storage_path: client,
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.hybrid_search_chunks",
+        lambda **kwargs: expected_results,
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.GemmaAnswerModel",
+        lambda: answer_model,
+    )
+
+    main(
+        [
+            "NVDA",
+            "--answer",
+            "What was revenue in fiscal 2026?",
+            "--limit",
+            "1",
+            "--qdrant-directory",
+            str(tmp_path / "qdrant"),
+        ]
+    )
+
+    assert client.closed is True
+    assert len(answer_model.prompts) == 1
+    assert "using only the supplied evidence" in answer_model.prompts[0]
+    assert chunk.content in answer_model.prompts[0]
+    assert capsys.readouterr().out == (
+        "Answer: NVIDIA's fiscal 2026 revenue was $215.9 billion [1].\n"
+        "Citations:\n"
+        "[1] https://www.sec.gov/Archives/example/nvda.htm "
+        "(chunk NVDA_10-K_2026-02-25-00134)\n"
+    )
+
+
 def test_cli_evaluates_local_retrieval(
     monkeypatch,
     capsys,

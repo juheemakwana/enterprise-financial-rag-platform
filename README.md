@@ -34,14 +34,18 @@ SEC filing ingestion is working. The project can:
 - Retrieve hybrid-ranked evidence with ticker and filing-form filters
 - Evaluate retrieval with a version-controlled question-and-evidence dataset
 - Measure Hit@1, Hit@3, Hit@5, mean reciprocal rank, and latency
+- Generate evidence-only answers locally with Gemma 4
+- Validate generated citation numbers against the supplied evidence
+- Print the exact SEC source and chunk behind every cited number
 - Validate the workflow with automated tests
 
-Answer generation and answer-quality evaluation are planned for later stages.
+Answer-quality evaluation is planned for a later stage.
 
 ## Requirements
 
 - Python 3.12
 - A real name and monitored contact email for the SEC `User-Agent`
+- About 10 GiB of free disk space for the local Gemma model
 
 ## Setup
 
@@ -66,6 +70,16 @@ cp .env.example .env
 
 Edit `.env` and replace the placeholder with your real SEC identity. The private
 `.env` file is ignored by Git.
+
+Download the local instruction-tuned answer model once:
+
+```bash
+hf download google/gemma-4-E2B-it
+```
+
+The model is stored in the current user's Hugging Face cache, not in the project
+or Git repository. A Hugging Face login, Ollama, and a paid model API are not
+required for this model.
 
 ## Usage
 
@@ -110,6 +124,20 @@ financial-rag NVDA \
 Search is local and does not require an SEC request. Use `--form 10-Q` to filter
 for a different filing form and `--qdrant-directory` to select another local
 Qdrant database.
+
+Generate an answer from the retrieved SEC evidence:
+
+```bash
+financial-rag NVDA \
+  --answer "What was NVIDIA's revenue in fiscal 2026?" \
+  --limit 5
+```
+
+`--answer` first performs the same hybrid retrieval as `--search`. It then
+numbers the retrieved evidence, asks local Gemma to answer using only that
+evidence, validates the citation labels, and prints the SEC URL and chunk ID for
+each cited number. The model is loaded once per command, so the first answer in
+a process has a noticeable startup delay.
 
 Evaluate retrieval against the saved NVDA questions:
 
