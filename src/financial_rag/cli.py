@@ -16,6 +16,8 @@ from financial_rag.evaluation import (
     load_retrieval_cases,
     run_retrieval_evaluation,
 )
+from financial_rag.gemma import GemmaAnswerModel
+from financial_rag.generation import generate_grounded_answer
 from financial_rag.parser import load_parsed_elements, parse_filing_file
 from financial_rag.retrieval import hybrid_search_chunks
 from financial_rag.sec import get_cik_for_ticker, ingest_latest_filing
@@ -80,6 +82,11 @@ def main(arguments: list[str] | None = None) -> None:
         help="Search the local Qdrant database for relevant evidence",
     )
     parser.add_argument(
+        "--answer",
+        metavar="QUESTION",
+        help="Answer a question from retrieved SEC evidence using local Gemma",
+    )
+    parser.add_argument(
         "--evaluate",
         action="store_true",
         help="Evaluate local retrieval using a saved question dataset",
@@ -116,10 +123,20 @@ def main(arguments: list[str] | None = None) -> None:
         parser.error("--chunk requires --parse")
     if args.index and not args.chunk:
         parser.error("--index requires --chunk")
-    if args.search and (args.download or args.parse or args.chunk or args.index):
-        parser.error("--search cannot be combined with ingestion options")
+    if args.search and (
+        args.answer or args.download or args.parse or args.chunk or args.index
+    ):
+        parser.error("--search cannot be combined with other actions")
+    if args.answer and (
+        args.download or args.parse or args.chunk or args.index or args.evaluate
+    ):
+        parser.error("--answer cannot be combined with other actions")
     if args.evaluate and (
-        args.search or args.download or args.parse or args.chunk or args.index
+        args.search
+        or args.download
+        or args.parse
+        or args.chunk
+        or args.index
     ):
         parser.error("--evaluate cannot be combined with other actions")
     if args.limit <= 0:
@@ -168,14 +185,15 @@ def main(arguments: list[str] | None = None) -> None:
         print(f"Mean latency: {summary.mean_latency_ms:.1f} ms")
         return
 
-    if args.search:
-        model = load_embedding_model()
-        query_vector = embed_query(args.search, model)
+    if args.search or args.answer:
+        question = args.search or args.answer
+        embedding_model = load_embedding_model()
+        query_vector = embed_query(question, embedding_model)
         client = open_local_vector_store(args.qdrant_directory)
         try:
             results = hybrid_search_chunks(
                 client=client,
-                question=args.search,
+                question=question,
                 query_vector=query_vector,
                 limit=args.limit,
                 ticker=ticker,
@@ -184,7 +202,29 @@ def main(arguments: list[str] | None = None) -> None:
         finally:
             client.close()
 
-        print(f"Search results for: {args.search}")
+        if args.answer:
+            answer = generate_grounded_answer(
+                question=question,
+                results=results,
+                model=GemmaAnswerModel(),
+                max_evidence=args.limit,
+            )
+            print(f"Answer: {answer.text}")
+            if answer.cited_numbers:
+                print("Citations:")
+                evidence_by_number = {
+                    item.citation_number: item
+                    for item in answer.context.evidence
+                }
+                for citation_number in answer.cited_numbers:
+                    evidence = evidence_by_number[citation_number]
+                    print(
+                        f"[{citation_number}] {evidence.sec_url} "
+                        f"(chunk {evidence.chunk_id})"
+                    )
+            return
+
+        print(f"Search results for: {question}")
         for rank, result in enumerate(results, start=1):
             chunk = result.chunk
             preview = " ".join(chunk.content.split())[:500]
