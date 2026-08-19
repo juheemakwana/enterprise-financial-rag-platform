@@ -1,5 +1,6 @@
 """Grounding and citation context for evidence-based answers."""
 
+import re
 from dataclasses import dataclass
 
 from financial_rag.models import SearchResult
@@ -113,3 +114,31 @@ def format_grounded_prompt(context: GroundedContext) -> str:
         )
 
     return "\n".join(lines)
+
+
+def validate_answer_citations(
+    answer: str,
+    context: GroundedContext,
+) -> tuple[int, ...]:
+    """Validate answer citation labels and return unique cited numbers."""
+    if not answer.strip():
+        raise ValueError("answer must not be empty")
+
+    cited_numbers = tuple(
+        dict.fromkeys(
+            int(value) for value in re.findall(r"\[(\d+)\]", answer)
+        )
+    )
+    allowed_numbers = {
+        item.citation_number for item in context.evidence
+    }
+    invalid_numbers = tuple(
+        number for number in cited_numbers if number not in allowed_numbers
+    )
+    if invalid_numbers:
+        labels = ", ".join(f"[{number}]" for number in invalid_numbers)
+        raise ValueError(f"Answer contains unavailable citations: {labels}")
+    if context.evidence and not cited_numbers:
+        raise ValueError("Answer must cite at least one supplied evidence item")
+
+    return cited_numbers

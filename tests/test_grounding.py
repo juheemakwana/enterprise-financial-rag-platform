@@ -5,6 +5,7 @@ import pytest
 from financial_rag.grounding import (
     build_grounded_context,
     format_grounded_prompt,
+    validate_answer_citations,
 )
 from financial_rag.models import DocumentChunk, FilingMetadata, SearchResult
 
@@ -105,3 +106,51 @@ def test_format_grounded_prompt_handles_no_evidence() -> None:
 def test_build_grounded_context_rejects_empty_question() -> None:
     with pytest.raises(ValueError, match="question must not be empty"):
         build_grounded_context("  ", [])
+
+
+def test_validate_answer_citations_returns_unique_numbers() -> None:
+    context = build_grounded_context(
+        "What were revenue and net income?",
+        [
+            make_search_result("revenue-chunk", "Revenue evidence.", 0.032),
+            make_search_result("income-chunk", "Income evidence.", 0.031),
+        ],
+    )
+
+    cited_numbers = validate_answer_citations(
+        "Revenue was reported [1], and net income was reported [2] [1].",
+        context,
+    )
+
+    assert cited_numbers == (1, 2)
+
+
+def test_validate_answer_citations_rejects_unavailable_number() -> None:
+    context = build_grounded_context(
+        "What was revenue?",
+        [make_search_result("revenue-chunk", "Revenue evidence.", 0.032)],
+    )
+
+    with pytest.raises(ValueError, match=r"unavailable citations: \[2\]"):
+        validate_answer_citations("Revenue was reported [2].", context)
+
+
+def test_validate_answer_citations_requires_a_citation_when_evidence_exists() -> None:
+    context = build_grounded_context(
+        "What was revenue?",
+        [make_search_result("revenue-chunk", "Revenue evidence.", 0.032)],
+    )
+
+    with pytest.raises(ValueError, match="must cite at least one"):
+        validate_answer_citations("Revenue was reported.", context)
+
+
+def test_validate_answer_citations_allows_uncited_no_evidence_response() -> None:
+    context = build_grounded_context("Unknown question?", [])
+
+    cited_numbers = validate_answer_citations(
+        "I cannot answer from the supplied evidence.",
+        context,
+    )
+
+    assert cited_numbers == ()
