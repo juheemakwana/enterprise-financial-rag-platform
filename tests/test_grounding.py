@@ -154,3 +154,17 @@ def test_validate_answer_citations_allows_uncited_no_evidence_response() -> None
     )
 
     assert cited_numbers == ()
+
+
+def test_validate_answer_citations_allows_canonical_abstention_with_evidence() -> None:
+    context = build_grounded_context(
+        "What was net income?",
+        [make_search_result("unrelated-chunk", "Revenue evidence.", 0.032)],
+    )
+
+    cited_numbers = validate_answer_citations(
+        "I cannot answer from the supplied evidence.",
+        context,
+    )
+
+    assert cited_numbers == ()

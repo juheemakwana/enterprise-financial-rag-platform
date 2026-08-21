@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from financial_rag.generation import (
+    AnswerValidationError,
     NO_EVIDENCE_ANSWER,
     generate_grounded_answer,
 )
@@ -66,12 +67,20 @@ def test_generate_grounded_answer_calls_model_and_validates_answer() -> None:
 def test_generate_grounded_answer_rejects_model_citation_not_in_context() -> None:
     model = FakeAnswerModel("Revenue was $215.9 billion [2].")
 
-    with pytest.raises(ValueError, match=r"unavailable citations: \[2\]"):
+    with pytest.raises(
+        AnswerValidationError,
+        match=r"unavailable citations: \[2\]",
+    ) as captured_error:
         generate_grounded_answer(
             question="What was NVIDIA's revenue?",
             results=[make_search_result()],
             model=model,
         )
+
+    assert captured_error.value.answer_text == (
+        "Revenue was $215.9 billion [2]."
+    )
+    assert captured_error.value.cited_numbers == (2,)
 
 
 def test_generate_grounded_answer_abstains_without_calling_model() -> None:
@@ -87,3 +96,18 @@ def test_generate_grounded_answer_abstains_without_calling_model() -> None:
     assert answer.cited_numbers == ()
     assert answer.context.evidence == ()
     assert model.prompts == []
+
+
+def test_generate_grounded_answer_accepts_model_abstention() -> None:
+    model = FakeAnswerModel(NO_EVIDENCE_ANSWER)
+
+    answer = generate_grounded_answer(
+        question="What was an unavailable fact?",
+        results=[make_search_result()],
+        model=model,
+    )
+
+    assert answer.text == NO_EVIDENCE_ANSWER
+    assert answer.cited_numbers == ()
+    assert len(answer.context.evidence) == 1
+    assert len(model.prompts) == 1

@@ -1,3 +1,8 @@
+from financial_rag.answer_evaluation import (
+    AnswerCaseMetrics,
+    AnswerEvaluationResult,
+    AnswerEvaluationSummary,
+)
 from financial_rag.cli import main
 from financial_rag.evaluation import (
     RetrievalCase,
@@ -457,6 +462,121 @@ def test_cli_evaluates_local_retrieval(
         "Hit@5: 1.000\n"
         "MRR: 1.000\n"
         "Mean latency: 12.3 ms\n"
+    )
+
+
+def test_cli_evaluates_grounded_answers(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
+    case = RetrievalCase(
+        case_id="nvda_revenue",
+        question="What was NVIDIA's revenue?",
+        ticker="NVDA",
+        form="10-K",
+        expected_answer="$215.9 billion",
+        category="financial_table",
+        accepted_source_sequences=(436,),
+        accepted_evidence_phrase_groups=(("revenue", "215.9 billion"),),
+        notes="Test case.",
+        accepted_answer_phrase_groups=(("215.9 billion",),),
+    )
+    result = AnswerEvaluationResult(
+        case_id=case.case_id,
+        question=case.question,
+        retrieved_chunk_ids=("revenue-chunk",),
+        answer_text="Revenue was $215.9 billion [1].",
+        cited_numbers=(1,),
+        metrics=AnswerCaseMetrics(
+            answer_correct=1,
+            abstained=0,
+            citation_present=1,
+            citation_correct=1,
+            grounded_pass=1,
+        ),
+        latency_ms=123.4,
+        error=None,
+    )
+    summary = AnswerEvaluationSummary(
+        results=(result,),
+        answer_accuracy=1.0,
+        abstention_rate=0.0,
+        citation_presence_rate=1.0,
+        citation_correctness_rate=1.0,
+        grounded_pass_rate=1.0,
+        mean_latency_ms=123.4,
+    )
+    embedding_model = object()
+    answer_model = object()
+    captured_call = {}
+
+    class FakeClient:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    client = FakeClient()
+
+    monkeypatch.setattr(
+        "financial_rag.cli.load_retrieval_cases",
+        lambda dataset_path: [case],
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.load_embedding_model",
+        lambda: embedding_model,
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.open_local_vector_store",
+        lambda storage_path: client,
+    )
+    monkeypatch.setattr(
+        "financial_rag.cli.GemmaAnswerModel",
+        lambda: answer_model,
+    )
+
+    def fake_run_answer_evaluation(**kwargs):
+        captured_call.update(kwargs)
+        return summary
+
+    monkeypatch.setattr(
+        "financial_rag.cli.run_answer_evaluation",
+        fake_run_answer_evaluation,
+    )
+
+    main(
+        [
+            "NVDA",
+            "--evaluate-answers",
+            "--limit",
+            "3",
+            "--evaluation-dataset",
+            str(tmp_path / "cases.jsonl"),
+            "--qdrant-directory",
+            str(tmp_path / "qdrant"),
+        ]
+    )
+
+    assert captured_call == {
+        "cases": [case],
+        "embedding_model": embedding_model,
+        "client": client,
+        "answer_model": answer_model,
+        "retrieval_limit": 3,
+    }
+    assert client.closed is True
+    assert capsys.readouterr().out == (
+        "Answer evaluation: NVDA 10-K\n"
+        "- nvda_revenue: correct=1, abstained=0, citation_present=1, "
+        "citation_correct=1, grounded=1, latency=123.4 ms\n"
+        "  Answer: Revenue was $215.9 billion [1].\n"
+        "Answer accuracy: 1.000\n"
+        "Abstention rate: 0.000\n"
+        "Citation presence: 1.000\n"
+        "Citation correctness: 1.000\n"
+        "Grounded pass rate: 1.000\n"
+        "Mean latency: 123.4 ms\n"
     )
 
 

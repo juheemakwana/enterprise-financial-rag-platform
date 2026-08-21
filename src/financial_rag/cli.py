@@ -6,6 +6,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from financial_rag.answer_evaluation import run_answer_evaluation
 from financial_rag.chunking import (
     chunk_document_elements,
     load_tokenizer,
@@ -92,6 +93,11 @@ def main(arguments: list[str] | None = None) -> None:
         help="Evaluate local retrieval using a saved question dataset",
     )
     parser.add_argument(
+        "--evaluate-answers",
+        action="store_true",
+        help="Evaluate local Gemma answers and their SEC citations",
+    )
+    parser.add_argument(
         "--evaluation-dataset",
         type=Path,
         default=Path("evals/datasets/retrieval_cases.jsonl"),
@@ -124,27 +130,97 @@ def main(arguments: list[str] | None = None) -> None:
     if args.index and not args.chunk:
         parser.error("--index requires --chunk")
     if args.search and (
-        args.answer or args.download or args.parse or args.chunk or args.index
+        args.answer
+        or args.evaluate
+        or args.evaluate_answers
+        or args.download
+        or args.parse
+        or args.chunk
+        or args.index
     ):
         parser.error("--search cannot be combined with other actions")
     if args.answer and (
-        args.download or args.parse or args.chunk or args.index or args.evaluate
+        args.download
+        or args.parse
+        or args.chunk
+        or args.index
+        or args.evaluate
+        or args.evaluate_answers
     ):
         parser.error("--answer cannot be combined with other actions")
     if args.evaluate and (
         args.search
+        or args.evaluate_answers
         or args.download
         or args.parse
         or args.chunk
         or args.index
     ):
         parser.error("--evaluate cannot be combined with other actions")
+    if args.evaluate_answers and (
+        args.download or args.parse or args.chunk or args.index
+    ):
+        parser.error("--evaluate-answers cannot be combined with other actions")
     if args.limit <= 0:
         parser.error("--limit must be positive")
     if args.evaluation_limit <= 0:
         parser.error("--evaluation-limit must be positive")
 
     ticker = args.ticker.upper()
+
+    if args.evaluate_answers:
+        cases = [
+            case
+            for case in load_retrieval_cases(args.evaluation_dataset)
+            if case.ticker == ticker and case.form == args.form.upper()
+        ]
+        if not cases:
+            raise SystemExit(
+                f"No evaluation cases found for {ticker} {args.form.upper()}"
+            )
+
+        embedding_model = load_embedding_model()
+        client = open_local_vector_store(args.qdrant_directory)
+        try:
+            summary = run_answer_evaluation(
+                cases=cases,
+                embedding_model=embedding_model,
+                client=client,
+                answer_model=GemmaAnswerModel(),
+                retrieval_limit=args.limit,
+            )
+        finally:
+            client.close()
+
+        print(f"Answer evaluation: {ticker} {args.form.upper()}")
+        for result in summary.results:
+            metrics = result.metrics
+            print(
+                f"- {result.case_id}: correct={metrics.answer_correct}, "
+                f"abstained={metrics.abstained}, "
+                f"citation_present={metrics.citation_present}, "
+                f"citation_correct={metrics.citation_correct}, "
+                f"grounded={metrics.grounded_pass}, "
+                f"latency={result.latency_ms:.1f} ms"
+            )
+            if result.answer_text:
+                answer_text = " ".join(result.answer_text.split())
+                print(f"  Answer: {answer_text}")
+            if result.error:
+                print(f"  Error: {result.error}")
+        print(f"Answer accuracy: {summary.answer_accuracy:.3f}")
+        print(f"Abstention rate: {summary.abstention_rate:.3f}")
+        print(
+            "Citation presence: "
+            f"{summary.citation_presence_rate:.3f}"
+        )
+        print(
+            "Citation correctness: "
+            f"{summary.citation_correctness_rate:.3f}"
+        )
+        print(f"Grounded pass rate: {summary.grounded_pass_rate:.3f}")
+        print(f"Mean latency: {summary.mean_latency_ms:.1f} ms")
+        return
 
     if args.evaluate:
         cases = [

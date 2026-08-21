@@ -37,9 +37,12 @@ SEC filing ingestion is working. The project can:
 - Generate evidence-only answers locally with Gemma 4
 - Validate generated citation numbers against the supplied evidence
 - Print the exact SEC source and chunk behind every cited number
+- Evaluate answer values, citations, abstentions, grounding, and latency
 - Validate the workflow with automated tests
 
-Answer-quality evaluation is planned for a later stage.
+The current answer-quality results are a small baseline, not a final performance
+claim. Broader filings, companies, question types, and unanswerable cases are
+planned for later stages.
 
 ## Requirements
 
@@ -150,6 +153,16 @@ loads `evals/datasets/retrieval_cases.jsonl` and checks the first 50 retrieved
 chunks for each question. Use `--evaluation-limit` to change that depth or
 `--evaluation-dataset` to select another JSON Lines dataset.
 
+Evaluate generated answers and their citations:
+
+```bash
+financial-rag NVDA --evaluate-answers --limit 5
+```
+
+This command loads BGE and Gemma once, then reuses them for every matching case.
+`--limit` controls how many retrieved chunks are supplied as numbered evidence
+for each answer.
+
 Raw filings are saved under `data/raw/`. Parsed filings are saved in a
 filing-specific folder under `data/parsed/`, for example:
 
@@ -256,6 +269,43 @@ The overall Hit@K values are averages across the dataset. For example, Hit@5 of
 `0.667` means four of six questions found accepted evidence within the first
 five results. `rank=not found` means no accepted evidence appeared within the
 configured evaluation limit; its RR is 0.
+
+## Answer evaluation
+
+The answer evaluator reuses the tracked retrieval cases and adds accepted answer
+phrase groups. It records the generated answer, retrieved chunk IDs, citations,
+validation errors, and end-to-end latency for every case. A failed case remains
+in the denominator instead of disappearing from the averages.
+
+The reported metrics are:
+
+- **Answer accuracy:** the answer contains an accepted factual value.
+- **Abstention rate:** the model uses the standard evidence-insufficient reply.
+- **Citation presence:** the response contains at least one citation label.
+- **Citation correctness:** every cited item matches accepted SEC evidence.
+- **Grounded pass rate:** both the answer value and its citation are correct.
+- **Latency:** time used for retrieval and answer generation. The first case also
+  includes model startup time.
+
+Baseline 1 uses the six NVIDIA fiscal 2026 questions and five evidence chunks per
+answer:
+
+| Metric | Baseline 1 |
+|---|---:|
+| Answer accuracy | 0.667 |
+| Abstention rate | 0.167 |
+| Citation presence | 0.833 |
+| Citation correctness | 0.667 |
+| Grounded pass rate | 0.667 |
+| Mean latency | 3.02 seconds |
+
+This is a diagnostic baseline, not a final evaluation. Net-income retrieval did
+not place accepted evidence within the first five chunks, so Gemma safely
+abstained. For research and development, accepted evidence was retrieved, but
+Gemma selected the narrower capitalized-expenditure value instead of total R&D
+expense. The next evaluation stages will add retrieval reranking, unanswerable
+cases, more companies and filings, per-category results, saved run reports, and
+regression tracking.
 
 ## Tests
 
