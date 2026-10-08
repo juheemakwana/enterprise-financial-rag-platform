@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -170,6 +171,10 @@ def test_load_retrieval_cases(tmp_path) -> None:
                 "ticker": "nvda",
                 "form": "10-k",
                 "expected_answer": "$215.9 billion",
+                "accepted_answer_phrase_groups": [
+                    ["215.9 billion"],
+                    ["215,938 million"],
+                ],
                 "category": "financial_table",
                 "accepted_source_sequences": [436, 609],
                 "accepted_evidence_phrase_groups": [
@@ -193,6 +198,10 @@ def test_load_retrieval_cases(tmp_path) -> None:
         ("revenue", "215,938"),
         ("revenue", "215.9 billion"),
     )
+    assert cases[0].accepted_answer_phrase_groups == (
+        ("215.9 billion",),
+        ("215,938 million",),
+    )
 
 
 def test_load_retrieval_cases_rejects_invalid_json(tmp_path) -> None:
@@ -201,3 +210,25 @@ def test_load_retrieval_cases_rejects_invalid_json(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="Line 1: invalid JSON"):
         load_retrieval_cases(dataset_path)
+
+
+def test_saved_cases_all_define_accepted_answer_phrases() -> None:
+    cases = load_retrieval_cases(
+        Path("evals/datasets/retrieval_cases.jsonl")
+    )
+
+    assert len(cases) == 6
+    assert all(case.accepted_answer_phrase_groups for case in cases)
+    phrases_by_case = {
+        case.case_id: case.accepted_answer_phrase_groups
+        for case in cases
+    }
+    assert phrases_by_case["nvda_fy2026_net_income"] == (
+        ("120.067 billion",),
+        ("120,067 million",),
+    )
+    assert phrases_by_case["nvda_2026_liquidity"] == (
+        ("62.556 billion",),
+        ("62,556 million",),
+        ("62.6 billion",),
+    )

@@ -25,6 +25,7 @@ class RetrievalCase:
     accepted_source_sequences: tuple[int, ...]
     accepted_evidence_phrase_groups: tuple[tuple[str, ...], ...]
     notes: str
+    accepted_answer_phrase_groups: tuple[tuple[str, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -94,11 +95,24 @@ def calculate_case_metrics(
 
 def chunk_matches_case(chunk: DocumentChunk, case: RetrievalCase) -> bool:
     """Return whether a chunk contains accepted source-backed evidence."""
+    return evidence_matches_case(
+        content=chunk.content,
+        source_sequences=chunk.source_sequences,
+        case=case,
+    )
+
+
+def evidence_matches_case(
+    content: str,
+    source_sequences: tuple[int, ...],
+    case: RetrievalCase,
+) -> bool:
+    """Return whether text and source sequences match accepted evidence."""
     accepted_sources = set(case.accepted_source_sequences)
-    if not accepted_sources.intersection(chunk.source_sequences):
+    if not accepted_sources.intersection(source_sequences):
         return False
 
-    normalized_content = " ".join(chunk.content.casefold().split())
+    normalized_content = " ".join(content.casefold().split())
     return any(
         all(
             " ".join(phrase.casefold().split()) in normalized_content
@@ -175,6 +189,37 @@ def _required_text(record: dict, field: str, line_number: int) -> str:
     return value.strip()
 
 
+def _phrase_groups(
+    record: dict,
+    field: str,
+    line_number: int,
+    required: bool,
+) -> tuple[tuple[str, ...], ...]:
+    """Read and validate required or optional phrase groups."""
+    value = record.get(field)
+    if value is None and not required:
+        return ()
+    if (
+        not isinstance(value, list)
+        or (required and not value)
+        or not all(
+            isinstance(group, list)
+            and group
+            and all(isinstance(phrase, str) and phrase.strip() for phrase in group)
+            for group in value
+        )
+    ):
+        requirement = "non-empty " if required else ""
+        raise ValueError(
+            f"Line {line_number}: {field} must be a {requirement}list "
+            "of non-empty text lists"
+        )
+    return tuple(
+        tuple(phrase.strip() for phrase in group)
+        for group in value
+    )
+
+
 def load_retrieval_cases(input_path: Path) -> list[RetrievalCase]:
     """Load and validate retrieval cases from a JSON Lines file."""
     cases = []
@@ -217,24 +262,18 @@ def load_retrieval_cases(input_path: Path) -> list[RetrievalCase]:
                     "must be a non-empty list of non-negative integers"
                 )
 
-            phrase_groups = record.get("accepted_evidence_phrase_groups")
-            if (
-                not isinstance(phrase_groups, list)
-                or not phrase_groups
-                or not all(
-                    isinstance(group, list)
-                    and group
-                    and all(
-                        isinstance(phrase, str) and phrase.strip()
-                        for phrase in group
-                    )
-                    for group in phrase_groups
-                )
-            ):
-                raise ValueError(
-                    f"Line {line_number}: accepted evidence phrase groups "
-                    "must be a non-empty list of non-empty text lists"
-                )
+            evidence_phrase_groups = _phrase_groups(
+                record=record,
+                field="accepted_evidence_phrase_groups",
+                line_number=line_number,
+                required=True,
+            )
+            answer_phrase_groups = _phrase_groups(
+                record=record,
+                field="accepted_answer_phrase_groups",
+                line_number=line_number,
+                required=False,
+            )
 
             cases.append(
                 RetrievalCase(
@@ -247,11 +286,9 @@ def load_retrieval_cases(input_path: Path) -> list[RetrievalCase]:
                     ),
                     category=_required_text(record, "category", line_number),
                     accepted_source_sequences=tuple(source_sequences),
-                    accepted_evidence_phrase_groups=tuple(
-                        tuple(phrase.strip() for phrase in group)
-                        for group in phrase_groups
-                    ),
+                    accepted_evidence_phrase_groups=evidence_phrase_groups,
                     notes=_required_text(record, "notes", line_number),
+                    accepted_answer_phrase_groups=answer_phrase_groups,
                 )
             )
             seen_case_ids.add(case_id)

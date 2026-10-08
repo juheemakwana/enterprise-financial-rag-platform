@@ -6,10 +6,12 @@ from dataclasses import dataclass
 from financial_rag.models import SearchResult
 
 
+ABSTENTION_ANSWER = "I cannot answer from the supplied evidence."
 GROUNDING_INSTRUCTIONS = """Answer the question using only the supplied evidence.
 Cite each factual claim with its evidence number, such as [1].
 Do not cite an evidence number that is not supplied.
-If the evidence is insufficient, say that you cannot answer from the supplied evidence."""
+If the evidence is insufficient, respond exactly with this sentence and no citation:
+I cannot answer from the supplied evidence."""
 
 
 @dataclass(frozen=True)
@@ -124,11 +126,7 @@ def validate_answer_citations(
     if not answer.strip():
         raise ValueError("answer must not be empty")
 
-    cited_numbers = tuple(
-        dict.fromkeys(
-            int(value) for value in re.findall(r"\[(\d+)\]", answer)
-        )
-    )
+    cited_numbers = extract_answer_citations(answer)
     allowed_numbers = {
         item.citation_number for item in context.evidence
     }
@@ -138,7 +136,27 @@ def validate_answer_citations(
     if invalid_numbers:
         labels = ", ".join(f"[{number}]" for number in invalid_numbers)
         raise ValueError(f"Answer contains unavailable citations: {labels}")
-    if context.evidence and not cited_numbers:
+    if (
+        context.evidence
+        and not cited_numbers
+        and not is_abstention_answer(answer)
+    ):
         raise ValueError("Answer must cite at least one supplied evidence item")
 
     return cited_numbers
+
+
+def extract_answer_citations(answer: str) -> tuple[int, ...]:
+    """Return unique bracketed citation numbers without validating them."""
+    return tuple(
+        dict.fromkeys(
+            int(value) for value in re.findall(r"\[(\d+)\]", answer)
+        )
+    )
+
+
+def is_abstention_answer(answer: str) -> bool:
+    """Return whether text is exactly the canonical evidence abstention."""
+    normalized_answer = " ".join(answer.casefold().split()).rstrip(".")
+    normalized_abstention = ABSTENTION_ANSWER.casefold().rstrip(".")
+    return normalized_answer == normalized_abstention
