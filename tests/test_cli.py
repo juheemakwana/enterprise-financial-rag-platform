@@ -402,6 +402,7 @@ def test_cli_evaluates_local_retrieval(
         mean_latency_ms=12.3,
     )
     model = object()
+    reranker = object()
     captured_call = {}
 
     class FakeClient:
@@ -424,6 +425,10 @@ def test_cli_evaluates_local_retrieval(
         "financial_rag.cli.open_local_vector_store",
         lambda storage_path: client,
     )
+    monkeypatch.setattr(
+        "financial_rag.cli.load_reranker",
+        lambda: reranker,
+    )
 
     def fake_run_retrieval_evaluation(**kwargs):
         captured_call.update(kwargs)
@@ -438,6 +443,7 @@ def test_cli_evaluates_local_retrieval(
         [
             "NVDA",
             "--evaluate",
+            "--rerank",
             "--evaluation-dataset",
             str(tmp_path / "cases.jsonl"),
             "--evaluation-limit",
@@ -452,10 +458,12 @@ def test_cli_evaluates_local_retrieval(
         "model": model,
         "client": client,
         "retrieval_limit": 25,
+        "reranker": reranker,
     }
     assert client.closed is True
     assert capsys.readouterr().out == (
         "Retrieval evaluation: NVDA 10-K\n"
+        "Reranking: enabled\n"
         "- nvda_revenue: rank=1, RR=1.000, latency=12.3 ms\n"
         "Hit@1: 1.000\n"
         "Hit@3: 1.000\n"
@@ -509,6 +517,7 @@ def test_cli_evaluates_grounded_answers(
     )
     embedding_model = object()
     answer_model = object()
+    reranker = object()
     captured_call = {}
 
     class FakeClient:
@@ -535,6 +544,10 @@ def test_cli_evaluates_grounded_answers(
         "financial_rag.cli.GemmaAnswerModel",
         lambda: answer_model,
     )
+    monkeypatch.setattr(
+        "financial_rag.cli.load_reranker",
+        lambda: reranker,
+    )
 
     def fake_run_answer_evaluation(**kwargs):
         captured_call.update(kwargs)
@@ -549,6 +562,7 @@ def test_cli_evaluates_grounded_answers(
         [
             "NVDA",
             "--evaluate-answers",
+            "--rerank",
             "--limit",
             "3",
             "--evaluation-dataset",
@@ -564,10 +578,12 @@ def test_cli_evaluates_grounded_answers(
         "client": client,
         "answer_model": answer_model,
         "retrieval_limit": 3,
+        "reranker": reranker,
     }
     assert client.closed is True
     assert capsys.readouterr().out == (
         "Answer evaluation: NVDA 10-K\n"
+        "Reranking: enabled\n"
         "- nvda_revenue: correct=1, abstained=0, citation_present=1, "
         "citation_correct=1, grounded=1, latency=123.4 ms\n"
         "  Answer: Revenue was $215.9 billion [1].\n"

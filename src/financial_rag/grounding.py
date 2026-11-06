@@ -148,10 +148,17 @@ def validate_answer_citations(
 
 def extract_answer_citations(answer: str) -> tuple[int, ...]:
     """Return unique bracketed citation numbers without validating them."""
-    return tuple(
-        dict.fromkeys(
-            int(value) for value in re.findall(r"\[(\d+)\]", answer)
+    citation_numbers = []
+    for citation_group in re.findall(
+        r"\[\s*(\d+(?:\s*,\s*\d+)*)\s*\]",
+        answer,
+    ):
+        citation_numbers.extend(
+            int(value) for value in re.findall(r"\d+", citation_group)
         )
+
+    return tuple(
+        dict.fromkeys(citation_numbers)
     )
 
 

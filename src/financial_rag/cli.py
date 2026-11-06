@@ -21,6 +21,7 @@ from financial_rag.gemma import GemmaAnswerModel
 from financial_rag.generation import generate_grounded_answer
 from financial_rag.parser import load_parsed_elements, parse_filing_file
 from financial_rag.retrieval import hybrid_search_chunks
+from financial_rag.reranking import load_reranker
 from financial_rag.sec import get_cik_for_ticker, ingest_latest_filing
 from financial_rag.vectorstore import (
     open_local_vector_store,
@@ -98,6 +99,11 @@ def main(arguments: list[str] | None = None) -> None:
         help="Evaluate local Gemma answers and their SEC citations",
     )
     parser.add_argument(
+        "--rerank",
+        action="store_true",
+        help="Rerank evaluation evidence with cached MiniLM",
+    )
+    parser.add_argument(
         "--evaluation-dataset",
         type=Path,
         default=Path("evals/datasets/retrieval_cases.jsonl"),
@@ -165,6 +171,8 @@ def main(arguments: list[str] | None = None) -> None:
         parser.error("--limit must be positive")
     if args.evaluation_limit <= 0:
         parser.error("--evaluation-limit must be positive")
+    if args.rerank and not (args.evaluate or args.evaluate_answers):
+        parser.error("--rerank requires --evaluate or --evaluate-answers")
 
     ticker = args.ticker.upper()
 
@@ -180,6 +188,7 @@ def main(arguments: list[str] | None = None) -> None:
             )
 
         embedding_model = load_embedding_model()
+        reranker = load_reranker() if args.rerank else None
         client = open_local_vector_store(args.qdrant_directory)
         try:
             summary = run_answer_evaluation(
@@ -188,11 +197,14 @@ def main(arguments: list[str] | None = None) -> None:
                 client=client,
                 answer_model=GemmaAnswerModel(),
                 retrieval_limit=args.limit,
+                reranker=reranker,
             )
         finally:
             client.close()
 
         print(f"Answer evaluation: {ticker} {args.form.upper()}")
+        if args.rerank:
+            print("Reranking: enabled")
         for result in summary.results:
             metrics = result.metrics
             print(
@@ -234,6 +246,7 @@ def main(arguments: list[str] | None = None) -> None:
             )
 
         model = load_embedding_model()
+        reranker = load_reranker() if args.rerank else None
         client = open_local_vector_store(args.qdrant_directory)
         try:
             summary = run_retrieval_evaluation(
@@ -241,11 +254,14 @@ def main(arguments: list[str] | None = None) -> None:
                 model=model,
                 client=client,
                 retrieval_limit=args.evaluation_limit,
+                reranker=reranker,
             )
         finally:
             client.close()
 
         print(f"Retrieval evaluation: {ticker} {args.form.upper()}")
+        if args.rerank:
+            print("Reranking: enabled")
         for result in summary.results:
             rank = result.metrics.first_relevant_rank
             rank_text = str(rank) if rank is not None else "not found"

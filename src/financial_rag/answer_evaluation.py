@@ -14,6 +14,7 @@ from financial_rag.generation import (
     GroundedAnswer,
 )
 from financial_rag.grounding import is_abstention_answer
+from financial_rag.reranking import PairScorer
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,7 @@ def run_answer_evaluation(
     client: QdrantClient,
     answer_model: AnswerModel,
     retrieval_limit: int = 5,
+    reranker: PairScorer | None = None,
 ) -> AnswerEvaluationSummary:
     """Retrieve, generate, and score an answer for every saved case."""
     if not cases:
@@ -131,6 +133,7 @@ def run_answer_evaluation(
 
     from financial_rag.embeddings import embed_query
     from financial_rag.generation import generate_grounded_answer
+    from financial_rag.reranking import hybrid_search_and_rerank
     from financial_rag.retrieval import hybrid_search_chunks
 
     results = []
@@ -145,14 +148,25 @@ def run_answer_evaluation(
     for case in cases:
         started_at = perf_counter()
         query_vector = embed_query(case.question, embedding_model)
-        search_results = hybrid_search_chunks(
-            client=client,
-            question=case.question,
-            query_vector=query_vector,
-            limit=retrieval_limit,
-            ticker=case.ticker,
-            form=case.form,
-        )
+        if reranker is None:
+            search_results = hybrid_search_chunks(
+                client=client,
+                question=case.question,
+                query_vector=query_vector,
+                limit=retrieval_limit,
+                ticker=case.ticker,
+                form=case.form,
+            )
+        else:
+            search_results = hybrid_search_and_rerank(
+                client=client,
+                question=case.question,
+                query_vector=query_vector,
+                scorer=reranker,
+                limit=retrieval_limit,
+                ticker=case.ticker,
+                form=case.form,
+            )
         retrieved_chunk_ids = tuple(
             result.chunk.chunk_id for result in search_results
         )
