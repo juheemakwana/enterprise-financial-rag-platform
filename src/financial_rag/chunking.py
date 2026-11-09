@@ -215,8 +215,11 @@ def chunk_table_element(
             index += 1
         return " | ".join(compacted)
 
-    def contains_unit_context(cells: list[str]) -> bool:
-        return any(TABLE_UNIT_PATTERN.search(cell) for cell in cells)
+    def is_unit_context_row(cells: list[str]) -> bool:
+        return (
+            any(TABLE_UNIT_PATTERN.search(cell) for cell in cells)
+            and not any(re.search(r"\d", cell) for cell in cells)
+        )
 
     rows = []
     for line in element.content.strip().splitlines():
@@ -242,10 +245,10 @@ def chunk_table_element(
             data_start += 1
 
         remaining_rows = rows[data_start:]
-        unit_rows = [row for row in remaining_rows if contains_unit_context(row)]
+        unit_rows = [row for row in remaining_rows if is_unit_context_row(row)]
         context_rows.extend(unit_rows)
         data_rows = [
-            row for row in remaining_rows if not contains_unit_context(row)
+            row for row in remaining_rows if not is_unit_context_row(row)
         ]
         if not data_rows:
             raise ValueError("Table does not contain a recognizable data row")

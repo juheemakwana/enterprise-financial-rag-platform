@@ -145,11 +145,21 @@ financial-rag NVDA \
   --limit 5
 ```
 
+Use the local MiniLM reranker for a normal answer:
+
+```bash
+financial-rag NVDA \
+  --answer "What was NVIDIA's revenue in fiscal 2026?" \
+  --rerank \
+  --limit 5
+```
+
 `--answer` first performs the same hybrid retrieval as `--search`. It then
 numbers the retrieved evidence, asks local Gemma to answer using only that
 evidence, validates the citation labels, and prints the SEC URL and chunk ID for
-each cited number. The model is loaded once per command, so the first answer in
-a process has a noticeable startup delay.
+each cited number. Add `--rerank` to either `--search` or `--answer` to rescore a
+broad candidate set before returning evidence. Models are loaded once per
+command, so the first answer in a process has a noticeable startup delay.
 
 Evaluate retrieval against the saved NVDA questions:
 

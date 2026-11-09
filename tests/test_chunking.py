@@ -276,6 +276,28 @@ def test_chunk_table_element_promotes_labeled_unit_row_to_context() -> None:
     )
 
 
+def test_chunk_table_element_keeps_numeric_row_that_mentions_units() -> None:
+    element = DocumentElement(
+        402,
+        "table",
+        "| Metric | 2026 |\n"
+        "| --- | --- |\n"
+        "| Shares purchased (in millions) | 2 |",
+    )
+
+    chunks = chunk_table_element(
+        element=element,
+        filing=make_filing_metadata(),
+        tokenizer=FakeTokenizer(),
+        chunk_tokens=30,
+    )
+
+    assert len(chunks) == 1
+    assert chunks[0].content.endswith(
+        "Data row:\nShares purchased (in millions) | 2"
+    )
+
+
 def test_chunk_document_elements_copies_adjacent_unit_note_to_table() -> None:
     elements = [
         DocumentElement(608, "text", "(In millions, except per share data)"),

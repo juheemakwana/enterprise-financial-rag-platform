@@ -301,6 +301,7 @@ def test_cli_answers_with_retrieved_evidence_and_prints_citations(
     )
     expected_results = [SearchResult(score=0.8019, chunk=chunk)]
     embedding_model = object()
+    reranker = object()
     query_vector = tuple([0.0] * 384)
 
     class FakeClient:
@@ -332,8 +333,18 @@ def test_cli_answers_with_retrieved_evidence_and_prints_citations(
         lambda storage_path: client,
     )
     monkeypatch.setattr(
-        "financial_rag.cli.hybrid_search_chunks",
-        lambda **kwargs: expected_results,
+        "financial_rag.cli.load_reranker",
+        lambda: reranker,
+    )
+    captured_search = {}
+
+    def fake_reranked_search(**kwargs):
+        captured_search.update(kwargs)
+        return expected_results
+
+    monkeypatch.setattr(
+        "financial_rag.cli.hybrid_search_and_rerank",
+        fake_reranked_search,
     )
     monkeypatch.setattr(
         "financial_rag.cli.GemmaAnswerModel",
@@ -345,6 +356,7 @@ def test_cli_answers_with_retrieved_evidence_and_prints_citations(
             "NVDA",
             "--answer",
             "What was revenue in fiscal 2026?",
+            "--rerank",
             "--limit",
             "1",
             "--qdrant-directory",
@@ -353,6 +365,8 @@ def test_cli_answers_with_retrieved_evidence_and_prints_citations(
     )
 
     assert client.closed is True
+    assert captured_search["scorer"] is reranker
+    assert captured_search["limit"] == 1
     assert len(answer_model.prompts) == 1
     assert "using only the supplied evidence" in answer_model.prompts[0]
     assert chunk.content in answer_model.prompts[0]
