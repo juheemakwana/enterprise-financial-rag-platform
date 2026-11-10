@@ -125,6 +125,33 @@ def test_validate_answer_citations_returns_unique_numbers() -> None:
     assert cited_numbers == (1, 2)
 
 
+def test_validate_answer_citations_accepts_grouped_numbers() -> None:
+    context = build_grounded_context(
+        "What were revenue and net income?",
+        [
+            make_search_result(f"chunk-{number}", "Evidence.", 1 / number)
+            for number in range(1, 5)
+        ],
+    )
+
+    cited_numbers = validate_answer_citations(
+        "Revenue and net income were reported [1, 4] [4].",
+        context,
+    )
+
+    assert cited_numbers == (1, 4)
+
+
+def test_validate_answer_citations_rejects_unavailable_grouped_number() -> None:
+    context = build_grounded_context(
+        "What was revenue?",
+        [make_search_result("revenue-chunk", "Revenue evidence.", 0.032)],
+    )
+
+    with pytest.raises(ValueError, match=r"unavailable citations: \[6\]"):
+        validate_answer_citations("Revenue was reported [1, 6].", context)
+
+
 def test_validate_answer_citations_rejects_unavailable_number() -> None:
     context = build_grounded_context(
         "What was revenue?",

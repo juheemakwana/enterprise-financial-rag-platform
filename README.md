@@ -32,10 +32,13 @@ SEC filing ingestion is working. The project can:
 - Create normalized 384-dimensional BGE embeddings locally
 - Persist vectors and searchable SEC metadata in local Qdrant
 - Retrieve hybrid-ranked evidence with ticker and filing-form filters
+- Rerank broad hybrid candidates with a local MiniLM cross-encoder
+- Prefer unit-preserving versions of duplicate financial table rows
 - Evaluate retrieval with a version-controlled question-and-evidence dataset
 - Measure Hit@1, Hit@3, Hit@5, mean reciprocal rank, and latency
 - Generate evidence-only answers locally with Gemma 4
 - Validate generated citation numbers against the supplied evidence
+- Accept individual and grouped citations such as `[1]` and `[1, 4]`
 - Print the exact SEC source and chunk behind every cited number
 - Evaluate answer values, citations, abstentions, grounding, and latency
 - Validate the workflow with automated tests
@@ -48,7 +51,7 @@ planned for later stages.
 
 - Python 3.12
 - A real name and monitored contact email for the SEC `User-Agent`
-- About 10 GiB of free disk space for the local Gemma model
+- About 11 GiB of free disk space for the cached local models
 
 ## Setup
 
@@ -80,9 +83,15 @@ Download the local instruction-tuned answer model once:
 hf download google/gemma-4-E2B-it
 ```
 
-The model is stored in the current user's Hugging Face cache, not in the project
-or Git repository. A Hugging Face login, Ollama, and a paid model API are not
-required for this model.
+Download the small local cross-encoder used for optional evidence reranking:
+
+```bash
+hf download cross-encoder/ms-marco-MiniLM-L6-v2
+```
+
+The models are stored in the current user's Hugging Face cache, not in the
+project or Git repository. A Hugging Face login, Ollama, and a paid model API
+are not required for these models.
 
 ## Usage
 
@@ -136,11 +145,21 @@ financial-rag NVDA \
   --limit 5
 ```
 
+Use the local MiniLM reranker for a normal answer:
+
+```bash
+financial-rag NVDA \
+  --answer "What was NVIDIA's revenue in fiscal 2026?" \
+  --rerank \
+  --limit 5
+```
+
 `--answer` first performs the same hybrid retrieval as `--search`. It then
 numbers the retrieved evidence, asks local Gemma to answer using only that
 evidence, validates the citation labels, and prints the SEC URL and chunk ID for
-each cited number. The model is loaded once per command, so the first answer in
-a process has a noticeable startup delay.
+each cited number. Add `--rerank` to either `--search` or `--answer` to rescore a
+broad candidate set before returning evidence. Models are loaded once per
+command, so the first answer in a process has a noticeable startup delay.
 
 Evaluate retrieval against the saved NVDA questions:
 
@@ -153,10 +172,22 @@ loads `evals/datasets/retrieval_cases.jsonl` and checks the first 50 retrieved
 chunks for each question. Use `--evaluation-limit` to change that depth or
 `--evaluation-dataset` to select another JSON Lines dataset.
 
+Evaluate the same questions after reranking broad hybrid candidates:
+
+```bash
+financial-rag NVDA --evaluate --rerank --evaluation-limit 5
+```
+
 Evaluate generated answers and their citations:
 
 ```bash
 financial-rag NVDA --evaluate-answers --limit 5
+```
+
+Evaluate answers with reranked evidence:
+
+```bash
+financial-rag NVDA --evaluate-answers --rerank --limit 5
 ```
 
 This command loads BGE and Gemma once, then reuses them for every matching case.
@@ -199,9 +230,10 @@ room within that limit.
 - Text chunks reuse up to 80 tokens of preceding context when whole elements fit.
 - An individual oversized text block is split into exact token windows with
   80-token overlap.
-- Tables remain intact when they fit within 400 tokens.
-- Oversized tables are split by data rows, and their Markdown header is repeated
-  in every resulting chunk.
+- Tables are split into searchable data-row chunks with their header context
+  repeated in each chunk.
+- Unit labels such as `In millions` are retained from table header rows or a
+  short unit note immediately preceding the table.
 - Text, tables, chunk IDs, and source sequence numbers retain document order.
 
 The first chunking run downloads the BGE tokenizer from Hugging Face. PyTorch and
@@ -233,6 +265,13 @@ returns semantic candidates while a local BM25 calculation ranks exact words
 and numbers. Reciprocal-rank fusion combines both lists, and the final results
 include official SEC citations. These are ranked evidence results, not a
 generated final answer.
+
+With `--rerank`, hybrid retrieval first returns 25 candidates. The local
+`cross-encoder/ms-marco-MiniLM-L6-v2` model then scores each question-and-chunk
+pair and returns the requested final results. Before cross-encoder scoring,
+duplicate table data rows from the same filing are collapsed. When duplicate
+rows differ in context quality, the version with an explicit financial unit is
+retained.
 
 The current BM25 implementation scans chunks matching the ticker and form from
 local Qdrant. This is appropriate for the learning-scale local corpus. A larger
@@ -270,6 +309,19 @@ The overall Hit@K values are averages across the dataset. For example, Hit@5 of
 five results. `rank=not found` means no accepted evidence appeared within the
 configured evaluation limit; its RR is 0.
 
+One local six-question run at a five-result limit produced:
+
+| Metric | Hybrid baseline | With MiniLM reranking |
+|---|---:|---:|
+| Hit@1 | 0.500 | 0.667 |
+| Hit@3 | 0.833 | 1.000 |
+| Hit@5 | 0.833 | 1.000 |
+| MRR | 0.639 | 0.806 |
+| Mean latency | 67.7 ms | 146.3 ms |
+
+Reranking moved accepted net-income evidence from outside the first five results
+to rank 1. Latency values depend on hardware, cache state, and model startup.
+
 ## Answer evaluation
 
 The answer evaluator reuses the tracked retrieval cases and adds accepted answer
@@ -287,25 +339,25 @@ The reported metrics are:
 - **Latency:** time used for retrieval and answer generation. The first case also
   includes model startup time.
 
-Baseline 1 uses the six NVIDIA fiscal 2026 questions and five evidence chunks per
-answer:
+The first baseline and the current reranked pipeline both use the six NVIDIA
+fiscal 2026 questions and five evidence chunks per answer:
 
-| Metric | Baseline 1 |
-|---|---:|
-| Answer accuracy | 0.667 |
-| Abstention rate | 0.167 |
-| Citation presence | 0.833 |
-| Citation correctness | 0.667 |
-| Grounded pass rate | 0.667 |
-| Mean latency | 3.02 seconds |
+| Metric | Baseline 1 | Reranked pipeline |
+|---|---:|---:|
+| Answer accuracy | 0.667 | 1.000 |
+| Abstention rate | 0.167 | 0.000 |
+| Citation presence | 0.833 | 1.000 |
+| Citation correctness | 0.667 | 1.000 |
+| Grounded pass rate | 0.667 | 1.000 |
+| Mean latency | 3.02 seconds | 2.40 seconds |
 
-This is a diagnostic baseline, not a final evaluation. Net-income retrieval did
-not place accepted evidence within the first five chunks, so Gemma safely
-abstained. For research and development, accepted evidence was retrieved, but
-Gemma selected the narrower capitalized-expenditure value instead of total R&D
-expense. The next evaluation stages will add retrieval reranking, unanswerable
-cases, more companies and filings, per-category results, saved run reports, and
-regression tracking.
+The final run passed all six cases after combining unit-preserving table chunks,
+MiniLM reranking, duplicate-aware evidence selection, grouped-citation parsing,
+and local Gemma generation. This is still a diagnostic learning milestone, not
+a production performance claim. The next evaluation stages should add
+unanswerable questions, more companies and filings, per-category results, saved
+run reports, and regression tracking. Latency comparisons should also be
+repeated across multiple warmed runs rather than inferred from one run.
 
 ## Tests
 

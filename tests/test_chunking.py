@@ -247,6 +247,88 @@ def test_chunk_table_element_repeats_multirow_financial_context() -> None:
     assert [chunk.source_sequences for chunk in chunks] == [(483,), (483,)]
 
 
+def test_chunk_table_element_promotes_labeled_unit_row_to_context() -> None:
+    element = DocumentElement(
+        899,
+        "table",
+        "|  | Year Ended |  |\n"
+        "| --- | --- | --- |\n"
+        "|  | 2026 | 2025 |\n"
+        "| Revenue by Geography: | (In millions) |  |\n"
+        "| United States | 149,617 | 77,482 |\n"
+        "| Total revenue | 215,938 | 130,497 |",
+    )
+
+    chunks = chunk_table_element(
+        element=element,
+        filing=make_filing_metadata(),
+        tokenizer=FakeTokenizer(),
+        chunk_tokens=50,
+    )
+
+    assert len(chunks) == 2
+    assert all(
+        "Revenue by Geography: | (In millions)" in chunk.content
+        for chunk in chunks
+    )
+    assert "Data row:\nTotal revenue | 215,938 | 130,497" in (
+        chunks[1].content
+    )
+
+
+def test_chunk_table_element_keeps_numeric_row_that_mentions_units() -> None:
+    element = DocumentElement(
+        402,
+        "table",
+        "| Metric | 2026 |\n"
+        "| --- | --- |\n"
+        "| Shares purchased (in millions) | 2 |",
+    )
+
+    chunks = chunk_table_element(
+        element=element,
+        filing=make_filing_metadata(),
+        tokenizer=FakeTokenizer(),
+        chunk_tokens=30,
+    )
+
+    assert len(chunks) == 1
+    assert chunks[0].content.endswith(
+        "Data row:\nShares purchased (in millions) | 2"
+    )
+
+
+def test_chunk_document_elements_copies_adjacent_unit_note_to_table() -> None:
+    elements = [
+        DocumentElement(608, "text", "(In millions, except per share data)"),
+        DocumentElement(
+            609,
+            "table",
+            "|  | Year Ended |  |\n"
+            "| --- | --- | --- |\n"
+            "|  | 2026 | 2025 |\n"
+            "| Revenue | 215,938 | 130,497 |\n"
+            "| Net income | 120,067 | 72,880 |",
+        ),
+    ]
+
+    chunks = chunk_document_elements(
+        elements=elements,
+        filing=make_filing_metadata(),
+        tokenizer=FakeTokenizer(),
+        chunk_tokens=50,
+        overlap_tokens=10,
+    )
+    table_chunks = [chunk for chunk in chunks if chunk.chunk_type == "table"]
+
+    assert len(table_chunks) == 2
+    assert all(
+        "(In millions, except per share data)" in chunk.content
+        for chunk in table_chunks
+    )
+    assert table_chunks[0].source_sequences == (609,)
+
+
 def test_chunk_table_element_preserves_single_row_table() -> None:
     element = DocumentElement(
         3,

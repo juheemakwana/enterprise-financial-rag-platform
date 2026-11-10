@@ -161,6 +161,55 @@ def test_run_retrieval_evaluation(monkeypatch) -> None:
     assert summary.mean_latency_ms >= 0
 
 
+def test_run_retrieval_evaluation_uses_optional_reranker(monkeypatch) -> None:
+    case = RetrievalCase(
+        case_id="revenue",
+        question="What was revenue?",
+        ticker="NVDA",
+        form="10-K",
+        expected_answer="$215.9 billion",
+        category="financial_table",
+        accepted_source_sequences=(436,),
+        accepted_evidence_phrase_groups=(("revenue", "215.9 billion"),),
+        notes="Test case.",
+    )
+    relevant_chunk = SimpleNamespace(
+        chunk_id="revenue-chunk",
+        source_sequences=(436,),
+        content="Revenue was $215.9 billion.",
+    )
+    reranker = object()
+    captured_call = {}
+
+    monkeypatch.setattr(
+        "financial_rag.embeddings.embed_query",
+        lambda question, model: (0.0,),
+    )
+
+    def fake_reranked_search(**kwargs):
+        captured_call.update(kwargs)
+        return [SimpleNamespace(chunk=relevant_chunk)]
+
+    monkeypatch.setattr(
+        "financial_rag.reranking.hybrid_search_and_rerank",
+        fake_reranked_search,
+    )
+
+    summary = run_retrieval_evaluation(
+        cases=[case],
+        model="fake-model",
+        client="fake-client",
+        retrieval_limit=5,
+        reranker=reranker,
+    )
+
+    assert summary.hit_at_1 == 1.0
+    assert captured_call["scorer"] is reranker
+    assert captured_call["limit"] == 5
+    assert captured_call["rerank_candidate_limit"] == 25
+    assert captured_call["hybrid_candidate_limit"] == 100
+
+
 def test_load_retrieval_cases(tmp_path) -> None:
     dataset_path = tmp_path / "cases.jsonl"
     dataset_path.write_text(

@@ -177,3 +177,61 @@ def test_run_answer_evaluation_continues_after_invalid_citation(
     assert summary.citation_correctness_rate == 0.5
     assert summary.grounded_pass_rate == 0.5
     assert summary.mean_latency_ms >= 0
+
+
+def test_run_answer_evaluation_uses_optional_reranker(monkeypatch) -> None:
+    case = make_revenue_case()
+    filing = FilingMetadata(
+        ticker="NVDA",
+        company_name="NVIDIA CORP",
+        cik="0001045810",
+        form="10-K",
+        filing_date="2026-02-25",
+        accession_number="0001045810-26-000021",
+        source_url="https://www.sec.gov/Archives/example/nvda.htm",
+        local_path=Path("data/raw/NVDA_10-K_2026-02-25.html"),
+    )
+    chunk = DocumentChunk(
+        chunk_id="revenue-chunk",
+        sequence=1,
+        chunk_type="text",
+        content="Revenue for fiscal 2026 was $215.9 billion.",
+        token_count=10,
+        source_sequences=(437,),
+        filing=filing,
+    )
+    reranker = object()
+    captured_call = {}
+
+    monkeypatch.setattr(
+        "financial_rag.embeddings.embed_query",
+        lambda question, model: (0.0,),
+    )
+
+    def fake_reranked_search(**kwargs):
+        captured_call.update(kwargs)
+        return [SearchResult(score=8.0, chunk=chunk)]
+
+    monkeypatch.setattr(
+        "financial_rag.reranking.hybrid_search_and_rerank",
+        fake_reranked_search,
+    )
+
+    class FakeAnswerModel:
+        def generate(self, prompt: str) -> str:
+            return "Revenue was $215.9 billion [1]."
+
+    summary = run_answer_evaluation(
+        cases=[case],
+        embedding_model="fake-embedding-model",
+        client="fake-client",
+        answer_model=FakeAnswerModel(),
+        retrieval_limit=5,
+        reranker=reranker,
+    )
+
+    assert summary.grounded_pass_rate == 1.0
+    assert captured_call["scorer"] is reranker
+    assert captured_call["limit"] == 5
+    assert captured_call["ticker"] == "NVDA"
+    assert captured_call["form"] == "10-K"

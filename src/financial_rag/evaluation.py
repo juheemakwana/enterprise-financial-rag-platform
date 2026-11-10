@@ -10,6 +10,11 @@ from qdrant_client import QdrantClient
 
 from financial_rag.embeddings import EmbeddingModel
 from financial_rag.models import DocumentChunk
+from financial_rag.reranking import (
+    DEFAULT_RERANK_CANDIDATE_LIMIT,
+    PairScorer,
+)
+from financial_rag.retrieval import DEFAULT_HYBRID_CANDIDATE_LIMIT
 
 
 @dataclass(frozen=True)
@@ -127,6 +132,7 @@ def run_retrieval_evaluation(
     model: EmbeddingModel,
     client: QdrantClient,
     retrieval_limit: int = 50,
+    reranker: PairScorer | None = None,
 ) -> RetrievalEvaluationSummary:
     """Search for every case and summarize rank-based retrieval quality."""
     if not cases:
@@ -135,20 +141,41 @@ def run_retrieval_evaluation(
         raise ValueError("retrieval_limit must be positive")
 
     from financial_rag.embeddings import embed_query
+    from financial_rag.reranking import hybrid_search_and_rerank
     from financial_rag.retrieval import hybrid_search_chunks
 
     results = []
     for case in cases:
         started_at = perf_counter()
         query_vector = embed_query(case.question, model)
-        search_results = hybrid_search_chunks(
-            client=client,
-            question=case.question,
-            query_vector=query_vector,
-            limit=retrieval_limit,
-            ticker=case.ticker,
-            form=case.form,
-        )
+        if reranker is None:
+            search_results = hybrid_search_chunks(
+                client=client,
+                question=case.question,
+                query_vector=query_vector,
+                limit=retrieval_limit,
+                ticker=case.ticker,
+                form=case.form,
+            )
+        else:
+            rerank_candidate_limit = max(
+                DEFAULT_RERANK_CANDIDATE_LIMIT,
+                retrieval_limit,
+            )
+            search_results = hybrid_search_and_rerank(
+                client=client,
+                question=case.question,
+                query_vector=query_vector,
+                scorer=reranker,
+                limit=retrieval_limit,
+                rerank_candidate_limit=rerank_candidate_limit,
+                hybrid_candidate_limit=max(
+                    DEFAULT_HYBRID_CANDIDATE_LIMIT,
+                    rerank_candidate_limit,
+                ),
+                ticker=case.ticker,
+                form=case.form,
+            )
         latency_ms = (perf_counter() - started_at) * 1_000
         retrieved_chunk_ids = tuple(
             result.chunk.chunk_id for result in search_results

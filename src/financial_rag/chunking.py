@@ -1,6 +1,7 @@
 """Tools for creating embedding-sized chunks from parsed filings."""
 
 import json
+import re
 from pathlib import Path
 from typing import Protocol
 
@@ -13,6 +14,10 @@ EMBEDDING_MODEL_NAME = "BAAI/bge-small-en-v1.5"
 MAX_MODEL_TOKENS = 512
 DEFAULT_CHUNK_TOKENS = 400
 DEFAULT_OVERLAP_TOKENS = 80
+TABLE_UNIT_PATTERN = re.compile(
+    r"\bin\s+(?:thousands|millions|billions)\b",
+    re.IGNORECASE,
+)
 
 
 class Tokenizer(Protocol):
@@ -173,6 +178,7 @@ def chunk_table_element(
     tokenizer: Tokenizer,
     chunk_tokens: int = DEFAULT_CHUNK_TOKENS,
     starting_sequence: int = 0,
+    additional_context: str | None = None,
 ) -> list[DocumentChunk]:
     """Create one searchable chunk per table row with repeated context."""
     if element.element_type != "table":
@@ -209,6 +215,12 @@ def chunk_table_element(
             index += 1
         return " | ".join(compacted)
 
+    def is_unit_context_row(cells: list[str]) -> bool:
+        return (
+            any(TABLE_UNIT_PATTERN.search(cell) for cell in cells)
+            and not any(re.search(r"\d", cell) for cell in cells)
+        )
+
     rows = []
     for line in element.content.strip().splitlines():
         cells = parse_cells(line)
@@ -219,7 +231,12 @@ def chunk_table_element(
         raise ValueError("Table does not contain a non-empty row")
 
     if len(rows) == 1:
-        parts = [f"Table row:\n{compact(rows[0])}"]
+        table_row = f"Table row:\n{compact(rows[0])}"
+        if additional_context and additional_context.strip():
+            table_row = (
+                f"Table context:\n{additional_context.strip()}\n\n{table_row}"
+            )
+        parts = [table_row]
     else:
         context_rows = [rows[0]]
         data_start = 1
@@ -227,13 +244,23 @@ def chunk_table_element(
             context_rows.append(rows[data_start])
             data_start += 1
 
-        data_rows = rows[data_start:]
+        remaining_rows = rows[data_start:]
+        unit_rows = [row for row in remaining_rows if is_unit_context_row(row)]
+        context_rows.extend(unit_rows)
+        data_rows = [
+            row for row in remaining_rows if not is_unit_context_row(row)
+        ]
         if not data_rows:
             raise ValueError("Table does not contain a recognizable data row")
 
-        context = "\n".join(
+        context_parts = [
             compact(row) for row in context_rows if compact(row)
-        )
+        ]
+        if additional_context and additional_context.strip():
+            normalized_additional_context = additional_context.strip()
+            if normalized_additional_context not in context_parts:
+                context_parts.append(normalized_additional_context)
+        context = "\n".join(context_parts)
         parts = []
         for row in data_rows:
             data_row = compact(row)
@@ -306,6 +333,14 @@ def chunk_document_elements(
             continue
 
         if element.element_type == "table":
+            additional_context = None
+            if text_run:
+                previous_text = text_run[-1].content.strip()
+                if (
+                    TABLE_UNIT_PATTERN.search(previous_text)
+                    and len(previous_text.split()) <= 15
+                ):
+                    additional_context = previous_text
             flush_text_run()
             chunks.extend(
                 chunk_table_element(
@@ -314,6 +349,7 @@ def chunk_document_elements(
                     tokenizer=tokenizer,
                     chunk_tokens=chunk_tokens,
                     starting_sequence=len(chunks),
+                    additional_context=additional_context,
                 )
             )
             continue
